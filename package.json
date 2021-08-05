@@ -1,0 +1,14 @@
+{
+  "name": "bot_vk",
+  "version": "1.0.0",
+  "description": "simple bot vk",
+  "main": "bot.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Pooh",
+  "license": "ISC",
+  "dependencies": {
+    "vk-io": "^4.3.2"
+  }
+}
