@@ -24,7 +24,11 @@ vk.updates.on('message_new', async (context) => {
 
     // console.log(context);
 
-    if (context.senderType === 'user' && context.senderId != 281457599 && context.peerId != 2000000046) {
+    if (context.senderId != 281457599 && context.senderId != 224935241 && context.senderId != 314177574) {
+        return;
+    }
+
+    if (context.senderType === 'user' && context.peerId == 2000000037) {
         try {
             if (!users.has(context.senderId)) {
                 user = await api.users.get({user_ids: context.senderId});
