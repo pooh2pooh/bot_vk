@@ -24,7 +24,8 @@ vk.updates.on('message_new', async (context) => {
 
     // console.log(context);
 
-    if (context.senderId != 281457599 && context.senderId != 224935241 && context.senderId != 314177574) {
+    if (context.senderId == 281457599 || context.senderId == 224935241 || context.senderId == 314177574) {
+    // Исключения для анти-флуда
         return;
     }
 
