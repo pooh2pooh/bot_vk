@@ -49,7 +49,7 @@ vk.updates.on('message_new', async (context) => {
             if (cur_user[1]['flood_counter'] == 3) {
                 cur_user[1]['warn_counter']++;
                 if (cur_user[1]['warn_counter'] == 2) {
-                    await context.reply('мут 3 минуты');
+                    await context.reply('мут 1 минуту');
                     cur_user[1]['warn_counter'] = 0;
                     console.log('[mute] for '+cur_user[0]['last_name']);
                 }
