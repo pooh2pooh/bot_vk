@@ -43,10 +43,10 @@ vk.updates.on('message_new', async (context) => {
 
             // anti-flood
             cur_user = users.get(context.senderId);
-            if (cur_user[1]['flood_counter'] < 3) {
+            if (cur_user[1]['flood_counter'] < 5) {
                 cur_user[1]['flood_counter']++;
             }
-            if (cur_user[1]['flood_counter'] == 3) {
+            if (cur_user[1]['flood_counter'] == 5) {
                 cur_user[1]['warn_counter']++;
                 if (cur_user[1]['warn_counter'] == 2) {
                     await context.reply('мут 1 минуту');
