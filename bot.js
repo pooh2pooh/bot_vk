@@ -31,7 +31,7 @@ vk.updates.on('message_new', async (context) => {
         return;
     }
 
-    if (context.senderType === 'user' && context.peerId == 2000000037) {
+    if (context.senderType === 'user' && context.peerId == 2000000001) {
         try {
             if (!users.has(context.senderId)) {
                 user = await api.users.get({user_ids: context.senderId});
@@ -51,6 +51,7 @@ vk.updates.on('message_new', async (context) => {
             if (cur_user[1]['flood_counter'] == 5) {
                 cur_user[1]['warn_counter']++;
                 if (cur_user[1]['warn_counter'] == 2) {
+                    await context.send(2000000002, '@all обратите внимание на '+cur_user[0]['last_name']+' (флуд)');
                     // await context.reply('мут 1 минуту'); ## uncomment for mute action!
                     cur_user[1]['warn_counter'] = 0;
                     console.log('[mute] for '+cur_user[0]['last_name']);
