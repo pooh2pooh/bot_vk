@@ -28,7 +28,7 @@ vk.updates.on('message_new', async (context) => {
     // Исключения для анти-флуда
         return;
     }
-    console.log(context.peerId);
+    
     if (context.senderType === 'user' && context.peerId == 2000000001) {
         try {
             if (!users.has(context.senderId)) {
