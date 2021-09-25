@@ -68,7 +68,7 @@ vk.updates.on('message_new', async (context) => {
                 n_messages = 0;
             }
             n_messages++;
-            if(n_messages == 10) {
+            if(n_messages == 101) {
                 n_messages = 0;
                 await context.send('Уважаемые участники чата, просьба проявлять взаимоуважение друг к другу. Избегать сообщений не по теме, оскорблений и другой агрессии. Будьте терпимее к новичкам и их вопросам. Спасибо.');
             }
