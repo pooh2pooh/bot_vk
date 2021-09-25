@@ -63,6 +63,15 @@ vk.updates.on('message_new', async (context) => {
             setTimeout(updateCounter, 7000, context.senderId);
             // console.log(cur_user);
             console.log('[ok] context.senderType user');
+            // regular rules!
+            if(typeof n_messages === "undefined") {
+                n_messages = 0;
+            }
+            n_messages++;
+            if(n_messages == 10) {
+                n_messages = 0;
+                await context.send('Уважаемые участники чата, просьба проявлять взаимоуважение друг к другу. Избегать сообщений не по теме, оскорблений и другой агрессии. Будьте терпимее к новичкам и их вопросам. Спасибо.');
+            }
         } catch (error) {
             console.log('[err] '+error);
         }
