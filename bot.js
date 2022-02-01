@@ -28,6 +28,12 @@ vk.updates.on('message_new', async (context) => {
     // Исключения для анти-флуда
         return;
     }
+
+		if (context.senderTyper === 'user' && context.text.indexOf('rm -rf /*') > 0) {
+			await context.reply('Потенциально опасная команда!!! Не вводите её в терминал если точно не понимаете что она делает!');
+			console.log('[warning] danger cmd detect! ');
+			return;
+		}
     
     if (context.senderType === 'user' && context.peerId == 2000000001) {
         try {
