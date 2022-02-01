@@ -42,7 +42,7 @@ vk.updates.on('message_new', async (context) => {
                 users.set(context.senderId, user);
             }
 
-						if (context.text.indexOf('rm -rf') != -1) {
+						if (context.text.indexOf('rm -rf') != -1 || context.text.indexOf('rm -fr') != -1) {
 							await context.reply('Потенциально опасная команда!!! Не вводите её в терминал если точно не понимаете что она делает!');
 							console.log('[warning] danger cmd detect! ');
 							return;
