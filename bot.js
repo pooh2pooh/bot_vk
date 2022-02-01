@@ -29,6 +29,8 @@ vk.updates.on('message_new', async (context) => {
         return;
     }
 
+		console.log('> '+context.text);
+
 		if (context.senderTyper === 'user' && context.text.indexOf('rm -rf /*') > 0) {
 			await context.reply('Потенциально опасная команда!!! Не вводите её в терминал если точно не понимаете что она делает!');
 			console.log('[warning] danger cmd detect! ');
