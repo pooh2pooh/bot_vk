@@ -29,14 +29,7 @@ vk.updates.on('message_new', async (context) => {
         return;
     }
 
-		console.log('> '+context.text);
-
-		if (context.senderTyper === 'user' && context.text.indexOf('rm -rf /*') > 0) {
-			await context.reply('Потенциально опасная команда!!! Не вводите её в терминал если точно не понимаете что она делает!');
-			console.log('[warning] danger cmd detect! ');
-			return;
-		}
-    
+	    
     if (context.senderType === 'user' && context.peerId == 2000000001) {
         try {
             if (!users.has(context.senderId)) {
@@ -48,6 +41,13 @@ vk.updates.on('message_new', async (context) => {
                 user.push(params);
                 users.set(context.senderId, user);
             }
+
+						if (context.senderTyper === 'user' && context.text.indexOf('rm -rf /*') > 0) {
+							await context.reply('Потенциально опасная команда!!! Не вводите её в терминал если точно не понимаете что она делает!');
+							console.log('[warning] danger cmd detect! ');
+							return;
+						}
+
 
             // anti-flood
             cur_user = users.get(context.senderId);
@@ -70,7 +70,7 @@ vk.updates.on('message_new', async (context) => {
             users.set(context.senderId, cur_user);
             setTimeout(updateCounter, 7000, context.senderId);
             // console.log(cur_user);
-            console.log('[ok] context.senderType user');
+            console.log('[ok] context.senderType user. '+context.text);
             // regular rules!
             if(typeof n_messages === "undefined") {
                 n_messages = 0;
