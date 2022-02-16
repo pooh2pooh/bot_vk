@@ -42,13 +42,13 @@ vk.updates.on('message_new', async (context) => {
                 users.set(context.senderId, user);
             }
 
-						if (context.text.indexOf('rm -rf') != -1 || context.text.indexOf('rm -fr') != -1 || context.text.indexOf('rm-rf') != -1 || context.text.indexOf('rm-fr') != -1) {
+						if (context.text.toLowerCase().indexOf('rm -rf'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('rm -fr'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('rm-rf'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('rm-fr'.toLowerCase()) != -1) {
 							await context.reply('❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!');
 							console.log('[warning] danger cmd detect! ');
 							return;
 						}
 
-					 if (context.text.indexOf('chmod 777') != -1 || context.text.indexOf('chmod 777 -r') != -1) {
+					 if (context.text.toLowerCase().indexOf('chmod 777'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('chmod 777 -r'.toLowerCase()) != -1) {
 						 await context.reply('❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!');
 						 console.log('[warning] danger cmd detect!');
 						 return;
