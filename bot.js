@@ -48,7 +48,7 @@ vk.updates.on('message_new', async (context) => {
 							return;
 						}
 
-					 if (context.text.toLowerCase().indexOf('chmod 777'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('chmod 777 -r'.toLowerCase()) != -1) {
+					 if (context.text.toLowerCase().indexOf('chmod 777'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('chmod -r 777'.toLowerCase()) != -1) {
 						 await context.reply('❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!');
 						 console.log('[warning] danger cmd detect!');
 						 return;
