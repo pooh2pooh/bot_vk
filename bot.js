@@ -27,6 +27,32 @@ function updateCounter(uid) {
 	users.set(uid, user);
 }
 
+vk.updates.on('message_edit', async (context) => {
+
+	if (context.senderType === 'user' && context.peerId == 2000000001) {
+		try {
+
+			if (context.text.toLowerCase().indexOf('rm -rf'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('rm -fr'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('rm-rf'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('rm-fr'.toLowerCase()) != -1 || regex_rmrf.test(context.text) == true) {
+				await context.reply('❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!');
+				console.log('[warning] danger cmd detect! ');
+				return;
+			}
+
+			if (context.text.toLowerCase().indexOf('chmod 777'.toLowerCase()) != -1 || context.text.toLowerCase().indexOf('chmod -r 777'.toLowerCase()) != -1) {
+				await context.reply('❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!');
+				console.log('[warning] danger cmd detect!');
+				return;
+			}
+		
+		} catch (error) {
+			console.log('[err] ' + error);
+		}
+		return;
+	}
+
+});
+
+
 vk.updates.on('message_new', async (context) => {
 
 	if (context.senderId == 281457599 || context.senderId == 224935241 || context.senderId == 314177574) {
