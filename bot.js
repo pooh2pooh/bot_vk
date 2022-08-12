@@ -41,7 +41,7 @@ async function warningDetector(peer_id) {
 	const a = await readyMessages(peer_id);
 
 
-	target_msg = a.items.find(item => /rm\s.*recursive\s.*force/i.test(item.text));
+	target_msg = a.items.find(item => /rm\s.*[recursive|force]\s.*/i.test(item.text));
 	if (target_msg) {
 
 		api.messages.send({random_id: Math.floor(Math.random() * 9999), peer_id: target_msg.peer_id, message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!', reply_to: target_msg.id});
