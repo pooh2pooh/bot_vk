@@ -166,12 +166,12 @@ async function warningDetector(peer_id) {
 
 	}
 
+
+	if (a.count > 99) {
+		last_messages_ids = "";
+	}
 }
 
-if (a.count > 99) {
-	last_messages_ids = "";
-}
-}
 
 vk.updates.on('message', async (context) => {
 
