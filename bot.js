@@ -69,7 +69,46 @@ async function warningDetector(peer_id) {
 				console.log('[warning] danger cmd detect! ');
 				return;
 
+			} else {
+
+				target_msg = a.items.find(item => /curl\s.*\|\s.*sh/i.test(item.text));
+				if (target_msg) {
+
+					api.messages.send({random_id: Math.floor(Math.random() * 9999), peer_id: target_msg.peer_id, message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!', reply_to: target_msg.id});
+					last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id+',', '');
+					console.log('[warning] danger cmd detect! ');
+					return;
+
+				} else {
+
+					target_msg = a.items.find(item => /base64\s.*\|\s.*sh/i.test(item.text));
+					if (target_msg) {
+
+						api.messages.send({random_id: Math.floor(Math.random() * 9999), peer_id: target_msg.peer_id, message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!', reply_to: target_msg.id});
+						last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id+',', '');
+						console.log('[warning] danger cmd detect! ');
+						return;
+
+					} else {
+
+						target_msg = a.items.find(item => /alias\s.*rm/i.test(item.text));
+						if (target_msg) {
+
+							api.messages.send({random_id: Math.floor(Math.random() * 9999), peer_id: target_msg.peer_id, message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!', reply_to: target_msg.id});
+							last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id+',', '');
+							console.log('[warning] danger cmd detect! ');
+							return;
+
+						}
+
+					}
+
+
+				}
+
+
 			}
+
 
 		}
 
