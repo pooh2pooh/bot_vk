@@ -51,7 +51,7 @@ async function warningDetector(peer_id) {
 
 	} else {
 
-		target_msg = a.items.find(item => /rm\s.*-[rf]{2}\s.*/i.test(item.text));
+		target_msg = a.items.find(item => /rm\s.*-[rf]{1,2}\s.*/i.test(item.text));
 		if (target_msg) {
 
 			api.messages.send({random_id: Math.floor(Math.random() * 9999), peer_id: target_msg.peer_id, message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!', reply_to: target_msg.id});
@@ -82,7 +82,7 @@ async function warningDetector(peer_id) {
 
 vk.updates.on('message', async (context) => {
 
-	if (context.senderId == 28145759 || context.senderId == 224935241 || context.senderId == 314177574) {
+	if (context.senderId == 281457599 || context.senderId == 224935241 || context.senderId == 314177574) {
 		// Исключения для анти-флуда
 		return;
 	}
