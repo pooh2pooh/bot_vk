@@ -1,27 +1,20 @@
-const {
-	API,
-	VK
-} = require('vk-io');
+const { API, VK } = require('vk-io');
 
-const vk = new VK({
-	// token: '950966ad649b862b3b0044a8827a42ab185760ac998388240911815ce96d3ab921d7f79fa24b80e65862a' ## Pooh bot
-	// token: 'add691fa45b26977dc5d9f170293680f57d2518731cf1424ab3b8932d16d437526e227349ba0bc5d1b605' ## Andrey Kovalev
-	token: 'e5097bcce26c4d88176eda74ee156b492528c0c19bf8e6a0cf3c2f18d2d1a87e443f7f37b3fd879c972cd'
-});
-const api = new API({
-	// token: '950966ad649b862b3b0044a8827a42ab185760ac998388240911815ce96d3ab921d7f79fa24b80e65862a'
-	// token: 'add691fa45b26977dc5d9f170293680f57d2518731cf1424ab3b8932d16d437526e227349ba0bc5d1b605'
-	token: 'e5097bcce26c4d88176eda74ee156b492528c0c19bf8e6a0cf3c2f18d2d1a87e443f7f37b3fd879c972cd'
-});
-// to dev chat - 2000000003
-// to adm chat - 2000000002
-// to main chat - 2000000001
+let config = require('./token.json');
+
+const vk = new VK(config);
+const api = new API(config);
+// dev chat - 2000000003
+// adm chat - 2000000002
+// main chat - 2000000001
 const chat_id = 2000000003;
 
-
 let users = new Map();
+let last_messages_ids = "99,";
 
-function updateCounter(uid) {
+
+function updateCounter(uid)
+{
 	user = users.get(uid);
 	// console.log(user);
 	if (user[1]['flood_counter'] > 0) {
@@ -30,38 +23,32 @@ function updateCounter(uid) {
 	users.set(uid, user);
 }
 
-let last_messages_ids = "1,";
-
-function readyMessages(peer_id) {
+function readyMessages(chat_id)
+{
 	return api.messages.getByConversationMessageId({
 		peer_id: chat_id,
 		conversation_message_ids: last_messages_ids
 	});
 }
 
-async function warningDetector(peer_id) {
+async function warningDetector(chat_id)
+{
 
-	const a = await readyMessages(peer_id);
+	const a = await readyMessages(chat_id);
+	danger_cmd_filters = [
+		/rm\s.*[recursive|force]\s.*/i,
+		/rm\s.*[/]\s.*/i,
+		/chmod\s.*[7]{3}\s.*/i,
+		/curl\s.*\|\s.*sh/i,
+		/alias\s.*rm/i,
+		/sh\s.*\s.*curl/i,
+		/sh\s.*base64/i,
+	];
 
-
-	target_msg = a.items.find(item => /rm\s.*[recursive|force]\s.*/i.test(item.text));
-	if (target_msg) {
-
-		api.messages.send({
-			random_id: Math.floor(Math.random() * 9999),
-			peer_id: target_msg.peer_id,
-			message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!',
-			reply_to: target_msg.id
-		});
-		last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id + ',', '');
-		console.log('[warning] danger cmd detect! ');
-		return;
-
-	} else {
-
-		target_msg = a.items.find(item => /rm\s.*-[rf]{1,2}\s.*/i.test(item.text));
+	danger_cmd_filters.forEach(function(arr_item, arr_i, arr) {
+		target_msg = a.items.find(item => item.text.match(arr_item));
+		// console.log(arr_item);
 		if (target_msg) {
-
 			api.messages.send({
 				random_id: Math.floor(Math.random() * 9999),
 				peer_id: target_msg.peer_id,
@@ -70,115 +57,21 @@ async function warningDetector(peer_id) {
 			});
 			last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id + ',', '');
 			console.log('[warning] danger cmd detect! ');
-			return;
-
-		} else {
-
-			target_msg = a.items.find(item => /chmod\s.*[7]{3}\s.*/i.test(item.text));
-			if (target_msg) {
-
-				api.messages.send({
-					random_id: Math.floor(Math.random() * 9999),
-					peer_id: target_msg.peer_id,
-					message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!',
-					reply_to: target_msg.id
-				});
-				last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id + ',', '');
-				console.log('[warning] danger cmd detect! ');
-				return;
-
-			} else {
-
-				target_msg = a.items.find(item => /curl\s.*\|\s.*sh/i.test(item.text));
-				if (target_msg) {
-
-					api.messages.send({
-						random_id: Math.floor(Math.random() * 9999),
-						peer_id: target_msg.peer_id,
-						message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!',
-						reply_to: target_msg.id
-					});
-					last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id + ',', '');
-					console.log('[warning] danger cmd detect! ');
-					return;
-
-				} else {
-
-					target_msg = a.items.find(item => /alias\s.*rm/i.test(item.text));
-					if (target_msg) {
-
-						api.messages.send({
-							random_id: Math.floor(Math.random() * 9999),
-							peer_id: target_msg.peer_id,
-							message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!',
-							reply_to: target_msg.id
-						});
-						last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id + ',', '');
-						console.log('[warning] danger cmd detect! ');
-						return;
-
-					} else {
-
-						target_msg = a.items.find(item => /sh\s.*\s.*curl/i.test(item.text));
-						if (target_msg) {
-
-							api.messages.send({
-								random_id: Math.floor(Math.random() * 9999),
-								peer_id: target_msg.peer_id,
-								message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!',
-								reply_to: target_msg.id
-							});
-							last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id + ',', '');
-							console.log('[warning] danger cmd detect! ');
-							return;
-
-						} else {
-
-							target_msg = a.items.find(item => /sh\s.*base64/i.test(item.text));
-							if (target_msg) {
-
-								api.messages.send({
-									random_id: Math.floor(Math.random() * 9999),
-									peer_id: target_msg.peer_id,
-									message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!',
-									reply_to: target_msg.id
-								});
-								last_messages_ids = last_messages_ids.replace(target_msg.conversation_message_id + ',', '');
-								console.log('[warning] danger cmd detect! ');
-								return;
-
-							}
-
-						}
-
-
-					}
-
-
-				}
-
-
-			}
-
-
 		}
+	});
 
-
-	}
-
-
-	if (a.count > 99) {
-		last_messages_ids = "";
+	if (a.count > 98) {
+		last_messages_ids = "1,";
 	}
 }
 
 
 vk.updates.on('message', async (context) => {
 
-	if (context.senderId == 281457599 || context.senderId == 224935241 || context.senderId == 314177574) {
-		// Исключения для анти-флуда
-		return;
-	}
+	// if (context.senderId == 281457599 || context.senderId == 224935241 || context.senderId == 314177574) {
+	// 	// Исключения для анти-флуда
+	// 	return;
+	// }
 
 
 	if (context.senderType === 'user' && context.peerId == chat_id) {
@@ -198,19 +91,6 @@ vk.updates.on('message', async (context) => {
 			last_messages_ids += context.conversationMessageId + ',';
 			console.log(last_messages_ids);
 
-
-
-			/*if (context.text.toLowerCase().indexOf('rm -rf') != -1 || context.text.toLowerCase().indexOf('rm -fr') != -1 || context.text.toLowerCase().indexOf('rm-rf') != -1 || context.text.toLowerCase().indexOf('rm-fr') != -1 || /rm\s.*recursive\s.*force/i.test(context.text) == true) {
-				await context.reply('❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!');
-				console.log('[warning] danger cmd detect! ');
-				return;
-			}
-
-			if (context.text.toLowerCase().indexOf('chmod 777') != -1 || context.text.toLowerCase().indexOf('chmod -r 777') != -1) {
-				await context.reply('❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!');
-				console.log('[warning] danger cmd detect!');
-				return;
-			}*/
 
 			// anti-flood
 			cur_user = users.get(context.senderId);
@@ -251,7 +131,8 @@ vk.updates.on('message', async (context) => {
 });
 
 
-async function run() {
+async function run()
+{
 
 	await vk.updates.start().catch(console.error);
 	setInterval(warningDetector, 3000, chat_id);
