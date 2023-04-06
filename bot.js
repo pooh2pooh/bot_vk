@@ -89,7 +89,7 @@ vk.updates.on('message', async (context) => {
 			}
 
 			last_messages_ids += context.conversationMessageId + ',';
-			console.log(last_messages_ids);
+			// console.log(last_messages_ids);
 
 
 			// anti-flood
@@ -112,7 +112,7 @@ vk.updates.on('message', async (context) => {
 			users.set(context.senderId, cur_user);
 			setTimeout(updateCounter, 7000, context.senderId);
 			// console.log(cur_user);
-			console.log('[ok] context.senderType user');
+			// console.log('[ok] context.senderType user');
 			// regular rules!
 			if (typeof n_messages === "undefined") {
 				n_messages = 0;
