@@ -1,7 +1,10 @@
-const { API, VK } = require('vk-io');
+const { API, VK, LinkAttachment } = require('vk-io');
+const Parser = require('rss-parser');
+const fs = require('fs');
 
 let config = require('./token.json');
 
+const parser = new Parser();
 const vk = new VK(config);
 const api = new API(config);
 // dev chat - 2000000003
@@ -11,6 +14,11 @@ const chat_id = 2000000003;
 
 let users = new Map();
 let last_messages_ids = "99,";
+let last_pub_date_rss = null;
+let last_pub_date_rss_news = null;
+let last_pub_date_rss_stable = null;
+let last_pub_date_rss_testing = null;
+let last_pub_date_rss_unstable = null;
 
 
 function updateCounter(uid)
@@ -63,6 +71,120 @@ async function warningDetector(chat_id)
 	if (a.count > 98) {
 		last_messages_ids = "1,";
 	}
+}
+
+async function getRSSFeed()
+{
+	(async () => {
+	  const feed = await parser.parseURL('https://blog.manjaro.org/feed/');
+	  // console.log(feed.title);
+	 
+	  feed.items.forEach(item => {
+	  	if (!last_pub_date_rss || new Date(item.isoDate) > last_pub_date_rss) {
+		  	api.messages.send({
+		  		random_id: Math.floor(Math.random() * 9999),
+		      peer_id: chat_id,
+		      message: '📗 Новая запись в блоге \n',
+		      attachment: [
+						item.link,
+					]
+	      });
+	      last_pub_date_rss = new Date(item.isoDate);
+	      fs.writeFileSync('feed_blog.txt', item.isoDate, 'utf8');
+	      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  	}
+	    // console.log(item.title + ': ' + item.link)
+	  });
+	})();
+
+	(async () => {
+	  const feed = await parser.parseURL('https://forum.manjaro.org/c/announcements/news.rss');
+	  // console.log(feed.title);
+	 
+	  feed.items.forEach(item => {
+	  	if (!last_pub_date_rss_news || new Date(item.isoDate) > last_pub_date_rss_news) {
+		  	api.messages.send({
+		  		random_id: Math.floor(Math.random() * 9999),
+		      peer_id: chat_id,
+		      message: '⚡ Новости \n',
+		      attachment: [
+						item.link,
+					]
+	      });
+	      last_pub_date_rss_news = new Date(item.isoDate);
+	      fs.writeFileSync('feed_news.txt', item.isoDate, 'utf8');
+	      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  	}
+	    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  });
+	})();
+
+	(async () => {
+	  const feed = await parser.parseURL('https://forum.manjaro.org/c/announcements/stable-updates.rss');
+	  // console.log(feed.title);
+	 
+	  feed.items.forEach(item => {
+	  	if (!last_pub_date_rss_stable || new Date(item.isoDate) > last_pub_date_rss_stable) {
+		  	api.messages.send({
+		  		random_id: Math.floor(Math.random() * 9999),
+		      peer_id: chat_id,
+		      message: '✅ Стабильное обновление \n',
+		      attachment: [
+						item.link,
+					]
+	      });
+	      last_pub_date_rss_stable = new Date(item.isoDate);
+	      fs.writeFileSync('feed_stable.txt', item.isoDate, 'utf8');
+	      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  	}
+	    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  });
+	})();
+
+	(async () => {
+	  const feed = await parser.parseURL('https://forum.manjaro.org/c/announcements/testing-updates.rss');
+	  // console.log(feed.title);
+	 
+	  feed.items.forEach(item => {
+	  	if (!last_pub_date_rss_testing || new Date(item.isoDate) > last_pub_date_rss_testing) {
+		  	api.messages.send({
+		  		random_id: Math.floor(Math.random() * 9999),
+		      peer_id: chat_id,
+		      message: '⚠ Обновление тестовой ветки\n',
+		      attachment: [
+						item.link,
+					]
+	      });
+	      last_pub_date_rss_testing = new Date(item.isoDate);
+	      fs.writeFileSync('feed_testing.txt', item.isoDate, 'utf8');
+	      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  	}
+	    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  });
+	})();
+
+	(async () => {
+	  const feed = await parser.parseURL('https://forum.manjaro.org/c/announcements/unstable-updates.rss');
+	  // console.log(feed.title);
+	 
+	  feed.items.forEach(item => {
+	  	if (!last_pub_date_rss_unstable || new Date(item.isoDate) > last_pub_date_rss_unstable) {
+		  	api.messages.send({
+		  		random_id: Math.floor(Math.random() * 9999),
+		      peer_id: chat_id,
+		      message: '‼ Обновление нестабильной ветки\n',
+		      attachment: [
+						item.link,
+					]
+	      });
+	      fs.writeFileSync('feed_unstable.txt', item.isoDate, 'utf8');
+	      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  	}
+	    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  });
+	})();
+
+	// console.log('Okay. Get RSS feed.');
 }
 
 
@@ -136,6 +258,58 @@ async function run()
 
 	await vk.updates.start().catch(console.error);
 	setInterval(warningDetector, 3000, chat_id);
+
+	// чтение последнего поста в блоге
+	fs.readFile('feed_blog.txt', 'utf8', function(err, data) {
+	  if (err) {
+	    console.error(err);
+	  } else {
+	  	last_pub_date_rss = new Date(data);
+	    // console.log(data);
+	  }
+	});
+
+	// чтение последнего анонса
+	fs.readFile('feed_news.txt', 'utf8', function(err, data) {
+	  if (err) {
+	    console.error(err);
+	  } else {
+	  	last_pub_date_rss_news = new Date(data);
+	    // console.log(data);
+	  }
+	});
+
+	// чтение последнего стабильного обновления
+	fs.readFile('feed_stable.txt', 'utf8', function(err, data) {
+	  if (err) {
+	    console.error(err);
+	  } else {
+	  	last_pub_date_rss_stable = new Date(data);
+	    // console.log(data);
+	  }
+	});
+
+	// чтение последнего тестового обновления
+	fs.readFile('feed_testing.txt', 'utf8', function(err, data) {
+	  if (err) {
+	    console.error(err);
+	  } else {
+	  	last_pub_date_rss_testing = new Date(data);
+	    // console.log(data);
+	  }
+	});
+
+	// чтение последнего НЕстабильного обновления
+	fs.readFile('feed_unstable.txt', 'utf8', function(err, data) {
+	  if (err) {
+	    console.error(err);
+	  } else {
+	  	last_pub_date_rss_unstable = new Date(data);
+	    // console.log(data);
+	  }
+	});
+
+	setInterval(getRSSFeed, 600000);
 
 }
 
