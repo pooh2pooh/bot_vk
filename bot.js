@@ -16,6 +16,7 @@ let users = new Map();
 let last_messages_ids = "99,";
 let last_pub_date_rss = null;
 let last_pub_date_rss_news = null;
+let last_pub_date_rss_releases = null;
 let last_pub_date_rss_stable = null;
 let last_pub_date_rss_testing = null;
 let last_pub_date_rss_unstable = null;
@@ -113,6 +114,28 @@ async function getRSSFeed()
 	      });
 	      last_pub_date_rss_news = new Date(item.isoDate);
 	      fs.writeFileSync('feed_news.txt', item.isoDate, 'utf8');
+	      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  	}
+	    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
+	  });
+	})();
+
+	(async () => {
+	  const feed = await parser.parseURL('https://forum.manjaro.org/c/announcements/releases.rss');
+	  // console.log(feed.title);
+	 
+	  feed.items.forEach(item => {
+	  	if (!last_pub_date_rss_releases || new Date(item.isoDate) > last_pub_date_rss_releases) {
+		  	api.messages.send({
+		  		random_id: Math.floor(Math.random() * 9999),
+		      peer_id: chat_id,
+		      message: '👻 Новый релиз! \n',
+		      attachment: [
+						item.link,
+					]
+	      });
+	      last_pub_date_rss_releases = new Date(item.isoDate);
+	      fs.writeFileSync('feed_releases.txt', item.isoDate, 'utf8');
 	      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
 	  	}
 	    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -275,6 +298,16 @@ async function run()
 	    console.error(err);
 	  } else {
 	  	last_pub_date_rss_news = new Date(data);
+	    // console.log(data);
+	  }
+	});
+
+	// чтение последнего релиза
+	fs.readFile('feed_releases.txt', 'utf8', function(err, data) {
+	  if (err) {
+	    console.error(err);
+	  } else {
+	  	last_pub_date_rss_releases = new Date(data);
 	    // console.log(data);
 	  }
 	});
