@@ -42,6 +42,8 @@ function readyMessages(chat_id)
 
 async function warningDetector(chat_id)
 {
+	const now = new Date();
+	const randomId = now.getTime();
 
 	const a = await readyMessages(chat_id);
 	danger_cmd_filters = [
@@ -59,7 +61,7 @@ async function warningDetector(chat_id)
 		// console.log(arr_item);
 		if (target_msg) {
 			api.messages.send({
-				random_id: Math.floor(Math.random() * 9999),
+				random_id: randomId,
 				peer_id: target_msg.peer_id,
 				message: '❗ Потенциально опасная команда❗ Не вводите её в терминал если точно не понимаете что она делает!',
 				reply_to: target_msg.id
@@ -76,6 +78,9 @@ async function warningDetector(chat_id)
 
 async function getRSSFeed()
 {
+	const now = new Date();
+	const randomId = now.getTime();
+
 	(async () => {
 	  const feed = await parser.parseURL('https://blog.manjaro.org/feed/');
 	  // console.log(feed.title);
@@ -83,7 +88,7 @@ async function getRSSFeed()
 	  feed.items.forEach(item => {
 	  	if (!last_pub_date_rss || new Date(item.isoDate) > last_pub_date_rss) {
 		  	api.messages.send({
-		  		random_id: Math.floor(Math.random() * 9999),
+		  		random_id: randomId,
 		      peer_id: chat_id,
 		      message: '📗 Новая запись в блоге \n',
 		      attachment: [
@@ -105,7 +110,7 @@ async function getRSSFeed()
 	  feed.items.forEach(item => {
 	  	if (!last_pub_date_rss_news || new Date(item.isoDate) > last_pub_date_rss_news) {
 		  	api.messages.send({
-		  		random_id: Math.floor(Math.random() * 9999),
+		  		random_id: randomId,
 		      peer_id: chat_id,
 		      message: '⚡ Новости \n',
 		      attachment: [
@@ -127,7 +132,7 @@ async function getRSSFeed()
 	  feed.items.forEach(item => {
 	  	if (!last_pub_date_rss_releases || new Date(item.isoDate) > last_pub_date_rss_releases) {
 		  	api.messages.send({
-		  		random_id: Math.floor(Math.random() * 9999),
+		  		random_id: randomId,
 		      peer_id: chat_id,
 		      message: '👻 Новый релиз! \n',
 		      attachment: [
@@ -149,7 +154,7 @@ async function getRSSFeed()
 	  feed.items.forEach(item => {
 	  	if (!last_pub_date_rss_stable || new Date(item.isoDate) > last_pub_date_rss_stable) {
 		  	api.messages.send({
-		  		random_id: Math.floor(Math.random() * 9999),
+		  		random_id: randomId,
 		      peer_id: chat_id,
 		      message: '✅ Стабильное обновление \n',
 		      attachment: [
@@ -171,7 +176,7 @@ async function getRSSFeed()
 	  feed.items.forEach(item => {
 	  	if (!last_pub_date_rss_testing || new Date(item.isoDate) > last_pub_date_rss_testing) {
 		  	api.messages.send({
-		  		random_id: Math.floor(Math.random() * 9999),
+		  		random_id: randomId,
 		      peer_id: chat_id,
 		      message: '⚠ Обновление тестовой ветки\n',
 		      attachment: [
@@ -193,13 +198,14 @@ async function getRSSFeed()
 	  feed.items.forEach(item => {
 	  	if (!last_pub_date_rss_unstable || new Date(item.isoDate) > last_pub_date_rss_unstable) {
 		  	api.messages.send({
-		  		random_id: Math.floor(Math.random() * 9999),
+		  		random_id: randomId,
 		      peer_id: chat_id,
 		      message: '‼ Обновление нестабильной ветки\n',
 		      attachment: [
 						item.link,
 					]
 	      });
+	      last_pub_date_rss_unstable = new Date(item.isoDate);
 	      fs.writeFileSync('feed_unstable.txt', item.isoDate, 'utf8');
 	      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
 	  	}
@@ -221,6 +227,9 @@ vk.updates.on('message', async (context) => {
 
 	if (context.senderType === 'user' && context.peerId == chat_id) {
 		try {
+			const now = new Date();
+			const randomId = now.getTime();
+
 			if (!users.has(context.senderId)) {
 				user = await api.users.get({
 					user_ids: context.senderId
@@ -265,7 +274,7 @@ vk.updates.on('message', async (context) => {
 			n_messages++;
 			if (n_messages == 301) {
 				n_messages = 0;
-				await context.send('Уважаемые участники чата, просьба проявлять взаимоуважение друг к другу. Избегать сообщений не по теме, оскорблений и другой агрессии. Будьте терпимее к новичкам и их вопросам. Спасибо.');
+				await context.send('Уважаемые участники чата, просьба проявлять взаимоуважение друг к другу. Избегать сообщений не по теме, оскорблений и другой агрессии. Будьте терпимее к новичкам и их вопросам. Спасибо.', { random_id: randomId });
 			}
 		} catch (error) {
 			console.log('[err] ' + error);
@@ -342,7 +351,7 @@ async function run()
 	  }
 	});
 
-	setInterval(getRSSFeed, 600000);
+	setInterval(getRSSFeed, 6000);
 
 }
 
