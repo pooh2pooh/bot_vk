@@ -54,7 +54,8 @@ async function warningDetector(chat_id)
 		/alias\s.*rm/i,
 		/sh\s.*\s.*curl/i,
 		/sh\s.*base64/i,
-		/dd if=\/dev\/zero\s.*/i
+		/dd if=\/dev\/zero\s.*/i,
+		/.*xxd/i
 	];
 
 	danger_cmd_filters.forEach(function(arr_item, arr_i, arr) {
