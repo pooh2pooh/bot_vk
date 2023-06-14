@@ -105,7 +105,7 @@ async function getRSSFeed()
 	})();
 
 	(async () => {
-	  const feed = await parser.parseURL('https://forum.manjaro.org/c/announcements/news.rss');
+	  const feed = await parser.parseURL('https://forum.manjaro.org/c/notices.rss');
 	  // console.log(feed.title);
 	 
 	  feed.items.forEach(item => {
@@ -113,13 +113,13 @@ async function getRSSFeed()
 		  	api.messages.send({
 		  		random_id: randomId,
 		      peer_id: chat_id,
-		      message: '⚡ Новости \n',
+		      message: '⚡ Важная заметка \n',
 		      attachment: [
 						item.link,
 					]
 	      });
 	      last_pub_date_rss_news = new Date(item.isoDate);
-	      fs.writeFileSync('feed_news.txt', item.isoDate, 'utf8');
+	      fs.writeFileSync('feed_notices.txt', item.isoDate, 'utf8');
 	      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
 	  	}
 	    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -303,7 +303,7 @@ async function run()
 	});
 
 	// чтение последнего анонса
-	fs.readFile('feed_news.txt', 'utf8', function(err, data) {
+	fs.readFile('feed_notices.txt', 'utf8', function(err, data) {
 	  if (err) {
 	    console.error(err);
 	  } else {
@@ -352,7 +352,7 @@ async function run()
 	  }
 	});
 
-	setInterval(getRSSFeed, 6000);
+	//setInterval(getRSSFeed, 6000);
 
 }
 
