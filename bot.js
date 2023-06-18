@@ -258,7 +258,11 @@ vk.updates.on('message', async (context) => {
 				if (cur_user[1]['warn_counter'] == 2) {
 					// await context.reply('мут 1 минуту'); ## uncomment for mute action!
 					cur_user[1]['warn_counter'] = 0;
-					console.log('[mute] for ' + cur_user[0]['last_name']);
+					api.messages.removeChatUser({
+					  chat_id: context.peerId,
+					  user_id: context.senderId,
+					});
+					console.log('[mute/kick] for ' + cur_user[0]['last_name']);
 				} else {
 					await context.reply('Не флуди❗');
 					console.log('[reply] for ' + cur_user[0]['last_name']);
