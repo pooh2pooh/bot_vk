@@ -105,15 +105,9 @@ async function get_rss_feed()
 		  // console.log(feed.title);
 	 
 		  feed.items.forEach(item => {
-		  	if (!last_pub_date_rss || new Date(item.isoDate) > last_pub_date_rss) {
-			  	api.messages.send({
-			  		random_id: randomId,
-			      peer_id: chat_id,
-			      message: '📗 Новая запись в блоге \n',
-			      attachment: [
-							item.link,
-						]
-		      });
+		  	post_time = new Date(item.isoDate);
+		  	if (!last_pub_date_rss || post_time > last_pub_date_rss) {
+		      sendMessage(chat_id, '📗 Новая запись в блоге \n', item.link);
 		      last_pub_date_rss = new Date(item.isoDate);
 		      fs.writeFileSync('feed_blog.txt', item.isoDate, 'utf8');
 		      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -140,15 +134,9 @@ async function get_rss_notices()
 		  // console.log(feed.title);
 		 
 		  feed.items.forEach(item => {
-		  	if (!last_pub_date_rss_news || new Date(item.isoDate) > last_pub_date_rss_news) {
-			  	api.messages.send({
-			  		random_id: randomId,
-			      peer_id: chat_id,
-			      message: '⚡ Важная заметка \n',
-			      attachment: [
-							item.link,
-						]
-		      });
+		  	post_time = new Date(item.isoDate);
+		  	if (!last_pub_date_rss_news || post_time > last_pub_date_rss_news) {
+		      sendMessage(chat_id, '⚡ Важная заметка \n', item.link);
 		      last_pub_date_rss_news = new Date(item.isoDate);
 		      fs.writeFileSync('feed_notices.txt', item.isoDate, 'utf8');
 		      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -175,15 +163,9 @@ async function get_rss_releases()
 		  // console.log(feed.title);
 		 
 		  feed.items.forEach(item => {
-		  	if (!last_pub_date_rss_releases || new Date(item.isoDate) > last_pub_date_rss_releases) {
-			  	api.messages.send({
-			  		random_id: randomId,
-			      peer_id: chat_id,
-			      message: '👻 Новый релиз! \n',
-			      attachment: [
-							item.link,
-						]
-		      });
+		  	post_time = new Date(item.isoDate);
+		  	if (!last_pub_date_rss_releases || post_time > last_pub_date_rss_releases) {
+		      sendMessage(chat_id, '👻 Новый релиз!\n', item.link);
 		      last_pub_date_rss_releases = new Date(item.isoDate);
 		      fs.writeFileSync('feed_releases.txt', item.isoDate, 'utf8');
 		      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -201,24 +183,15 @@ async function get_rss_releases()
 
 async function get_rss_stable()
 {
-	const now = new Date();
-	const randomId = now.getTime();
-
 	(async () => {
 		try {
 		  const feed = await parser.parseURL('https://forum.manjaro.org/c/announcements/stable-updates.rss');
 		  // console.log(feed.title);
 		 
 		  feed.items.forEach(item => {
-		  	if (!last_pub_date_rss_stable || new Date(item.isoDate) > last_pub_date_rss_stable) {
-			  	api.messages.send({
-			  		random_id: randomId,
-			      peer_id: chat_id,
-			      message: '✅ Стабильное обновление \n',
-			      attachment: [
-							item.link,
-						]
-		      });
+		  	post_time = new Date(item.isoDate);
+		  	if (!last_pub_date_rss_stable || post_time > last_pub_date_rss_stable) {
+		      sendMessage(chat_id, '✅ Стабильное обновление \n', item.link);
 		      last_pub_date_rss_stable = new Date(item.isoDate);
 		      fs.writeFileSync('feed_stable.txt', item.isoDate, 'utf8');
 		      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -236,24 +209,15 @@ async function get_rss_stable()
 
 async function get_rss_testing()
 {
-	const now = new Date();
-	const randomId = now.getTime();
-
 	(async () => {
 		try {
 		  const feed = await parser.parseURL('https://forum.manjaro.org/c/announcements/testing-updates.rss');
 		  // console.log(feed.title);
 		 
 		  feed.items.forEach(item => {
-		  	if (!last_pub_date_rss_testing || new Date(item.isoDate) > last_pub_date_rss_testing) {
-			  	api.messages.send({
-			  		random_id: randomId,
-			      peer_id: chat_id,
-			      message: '⚠ Обновление тестовой ветки\n',
-			      attachment: [
-							item.link,
-						]
-		      });
+		  	post_time = new Date(item.isoDate);
+		  	if (!last_pub_date_rss_testing || post_time > last_pub_date_rss_testing) {
+		      sendMessage(chat_id, '⚠ Обновление тестовой ветки\n', item.link);
 		      last_pub_date_rss_testing = new Date(item.isoDate);
 		      fs.writeFileSync('feed_testing.txt', item.isoDate, 'utf8');
 		      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -271,25 +235,15 @@ async function get_rss_testing()
 
 async function get_rss_unstable()
 {
-	const now = new Date();
-	const randomId = now.getTime();
-
-	
 		(async () => {
 			try {
 			  const feed = await parser.parseURL('https://forum.manjaro.org/c/announcements/unstable-updates.rss');
 			  // console.log(feed.title);
 			 
 			  feed.items.forEach(item => {
-			  	if (!last_pub_date_rss_unstable || new Date(item.isoDate) > last_pub_date_rss_unstable) {
-				  	api.messages.send({
-				  		random_id: randomId,
-				      peer_id: chat_id,
-				      message: '‼ Обновление нестабильной ветки\n',
-				      attachment: [
-								item.link,
-							]
-			      });
+			  	post_time = new Date(item.isoDate);
+			  	if (!last_pub_date_rss_unstable || post_time > last_pub_date_rss_unstable) {
+				  	sendMessage(chat_id, '‼ Обновление нестабильной ветки\n', item.link);
 			      last_pub_date_rss_unstable = new Date(item.isoDate);
 			      fs.writeFileSync('feed_unstable.txt', item.isoDate, 'utf8');
 			      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -378,6 +332,25 @@ vk.updates.on('message', async (context) => {
 });
 
 
+// Отправляет сообщение в чат
+function sendMessage(chat_id, message, link)
+{ 
+  let now = new Date();
+	let randomId = now.getTime();
+
+	//console.log(now + ': ' + message);
+
+	api.messages.send({
+		random_id: randomId,
+		peer_id: chat_id,
+		message: message,
+		attachment: [
+			link,
+		]
+	});
+}
+
+
 async function run()
 {
 
@@ -444,7 +417,8 @@ async function run()
 	  }
 	});
 
-	setInterval(get_rss_feed, 6000);
+	// Этот канал отвалился, ошибка 404
+	// setInterval(get_rss_feed, 6000);
 	setInterval(get_rss_notices, 6000);
 	setInterval(get_rss_releases, 6000);
 	setInterval(get_rss_stable, 6000);
