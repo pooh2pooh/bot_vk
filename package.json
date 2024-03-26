@@ -9,6 +9,7 @@
   "author": "Pooh",
   "license": "ISC",
   "dependencies": {
+    "colors": "^1.4.0",
     "rss-parser": "^3.12.0",
     "vk-io": "^4.3.2"
   },

@@ -1,6 +1,7 @@
 const { API, VK, LinkAttachment } = require('vk-io');
 const Parser = require('rss-parser');
 const fs = require('fs');
+const colors = require('colors');
 
 let config = require('./token.json');
 
@@ -24,6 +25,10 @@ let last_pub_date_rss_releases = null;
 let last_pub_date_rss_stable = null;
 let last_pub_date_rss_testing = null;
 let last_pub_date_rss_unstable = null;
+
+// Переводим две минуты в миллисекунды (1 минута = 60 секунд = 60 000 миллисекунд)
+// для использовании в условии с проверкой временной метки последнего отправленного сообщения из RSS → ВК
+let twoMinutes = 2 * 60 * 1000;
 
 
 // Период (в секундах) через который убавляется счётчик АНТИФЛУДа для пользователя
@@ -103,10 +108,10 @@ async function get_rss_feed()
 		 
 			  feed.items.forEach(item => {
 			  	post_time = new Date(item.isoDate);
-			  	if (!last_pub_date_rss || post_time > last_pub_date_rss) {
+			  	if (!last_pub_date_rss || post_time >= (last_pub_date_rss.getTime() + twoMinutes)) {
 			      sendMessage(chat_id, '📗 Новая запись в блоге \n', item.link);
 			      last_pub_date_rss = new Date(item.isoDate);
-			      fs.writeFileSync('feed_blog.txt', item.isoDate, 'utf8');
+			      fs.writeFileSync('feed_blog.txt', last_pub_date_rss.toISOString(), 'utf8');
 			      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
 			  	}
 			    // console.log(item.title + ': ' + item.link)
@@ -129,10 +134,10 @@ async function get_rss_notices()
 			 
 			  feed.items.forEach(item => {
 			  	post_time = new Date(item.isoDate);
-			  	if (!last_pub_date_rss_news || post_time > last_pub_date_rss_news) {
+			  	if (!last_pub_date_rss_news || post_time >= (last_pub_date_rss_news.getTime() + twoMinutes)) {
 			      sendMessage(chat_id, '⚡ Важная заметка \n', item.link);
 			      last_pub_date_rss_news = new Date(item.isoDate);
-			      fs.writeFileSync('feed_notices.txt', item.isoDate, 'utf8');
+			      fs.writeFileSync('feed_notices.txt', last_pub_date_rss_news.toISOString(), 'utf8');
 			      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
 			  	}
 			    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -155,10 +160,10 @@ async function get_rss_releases()
 			 
 			  feed.items.forEach(item => {
 			  	post_time = new Date(item.isoDate);
-			  	if (!last_pub_date_rss_releases || post_time > last_pub_date_rss_releases) {
+			  	if (!last_pub_date_rss_releases || post_time >= (last_pub_date_rss_releases.getTime() + twoMinutes)) {
 			      sendMessage(chat_id, '👻 Новый релиз!\n', item.link);
 			      last_pub_date_rss_releases = new Date(item.isoDate);
-			      fs.writeFileSync('feed_releases.txt', item.isoDate, 'utf8');
+			      fs.writeFileSync('feed_releases.txt', last_pub_date_rss_releases.toISOString(), 'utf8');
 			      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
 			  	}
 			    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -181,10 +186,10 @@ async function get_rss_stable()
 			 
 			  feed.items.forEach(item => {
 			  	post_time = new Date(item.isoDate);
-			  	if (!last_pub_date_rss_stable || post_time > last_pub_date_rss_stable) {
+			  	if (!last_pub_date_rss_stable || post_time >= (last_pub_date_rss_stable.getTime() + twoMinutes)) {
 			      sendMessage(chat_id, '✅ Стабильное обновление \n', item.link);
 			      last_pub_date_rss_stable = new Date(item.isoDate);
-			      fs.writeFileSync('feed_stable.txt', item.isoDate, 'utf8');
+			      fs.writeFileSync('feed_stable.txt', last_pub_date_rss_stable.toISOString(), 'utf8');
 			      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
 			  	}
 			    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -207,10 +212,10 @@ async function get_rss_testing()
 			 
 			  feed.items.forEach(item => {
 			  	post_time = new Date(item.isoDate);
-			  	if (!last_pub_date_rss_testing || post_time > last_pub_date_rss_testing) {
+			  	if (!last_pub_date_rss_testing || post_time >= (last_pub_date_rss_testing.getTime() + twoMinutes)) {
 			      sendMessage(chat_id, '⚠ Обновление тестовой ветки\n', item.link);
 			      last_pub_date_rss_testing = new Date(item.isoDate);
-			      fs.writeFileSync('feed_testing.txt', item.isoDate, 'utf8');
+			      fs.writeFileSync('feed_testing.txt', last_pub_date_rss_testing.toISOString(), 'utf8');
 			      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
 			  	}
 			    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -233,10 +238,10 @@ async function get_rss_unstable()
 			 
 			  feed.items.forEach(item => {
 			  	post_time = new Date(item.isoDate);
-			  	if (!last_pub_date_rss_unstable || post_time > last_pub_date_rss_unstable) {
+			  	if (!last_pub_date_rss_unstable  || post_time >= (last_pub_date_rss_unstable.getTime() + twoMinutes)) {
 				  	sendMessage(chat_id, '‼ Обновление нестабильной ветки\n', item.link);
 			      last_pub_date_rss_unstable = new Date(item.isoDate);
-			      fs.writeFileSync('feed_unstable.txt', item.isoDate, 'utf8');
+			      fs.writeFileSync('feed_unstable.txt', last_pub_date_rss_unstable.toISOString(), 'utf8');
 			      // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
 			  	}
 			    // console.log(item.isoDate + ' ' + item.title + ': ' + item.link)
@@ -348,13 +353,34 @@ async function run()
 		await vk.updates.start().catch(console.error);
 		setInterval(warningDetector, 3000, chat_id);
 
+		const currentDate = new Date();
+		let color;
+
+		console.log('\nLast Sync Time:'.white);
+
 		// чтение последнего поста в блоге
 		fs.readFile('feed_blog.txt', 'utf8', function(err, data) {
 		  if (err) {
 		    console.error(err);
 		  } else {
+
 		  	last_pub_date_rss = new Date(data);
-		    // console.log(data);
+
+		  	const timeDiff = currentDate.getTime() - last_pub_date_rss.getTime();
+		  	// Преобразуем время в часы и месяцы
+				const hoursDiff = Math.floor(timeDiff / (1000 * 60 * 60));
+				const monthsDiff = Math.floor(hoursDiff / (24 * 30));
+
+				// Устанавливаем цвет в зависимости от временной разницы
+				if (hoursDiff <= 1) {
+				    console.log('Blog → '.green + data)
+				} else if (monthsDiff >= 1) {
+				    console.log('Blog → '.red + data)
+				} else {
+				    // В этом случае, если прошло более 1 часа, но менее 1 месяца
+				    // Вы можете выбрать другой цвет, если хотите
+				    console.log('Blog → '.yellow + data)
+				}
 		  }
 		});
 
@@ -364,7 +390,22 @@ async function run()
 		    console.error(err);
 		  } else {
 		  	last_pub_date_rss_news = new Date(data);
-		    // console.log(data);
+		    
+		  	const timeDiff = currentDate.getTime() - last_pub_date_rss_news.getTime();
+		  	// Преобразуем время в часы и месяцы
+				const hoursDiff = Math.floor(timeDiff / (1000 * 60 * 60));
+				const monthsDiff = Math.floor(hoursDiff / (24 * 30));
+
+				// Устанавливаем цвет в зависимости от временной разницы
+				if (hoursDiff <= 1) {
+				    console.log('News → '.green + data)
+				} else if (monthsDiff >= 1) {
+				    console.log('News → '.red + data)
+				} else {
+				    // В этом случае, если прошло более 1 часа, но менее 1 месяца
+				    // Вы можете выбрать другой цвет, если хотите
+				    console.log('News → '.yellow + data)
+				}
 		  }
 		});
 
@@ -374,7 +415,22 @@ async function run()
 		    console.error(err);
 		  } else {
 		  	last_pub_date_rss_releases = new Date(data);
-		    // console.log(data);
+		    
+		  	const timeDiff = currentDate.getTime() - last_pub_date_rss_releases.getTime();
+		  	// Преобразуем время в часы и месяцы
+				const hoursDiff = Math.floor(timeDiff / (1000 * 60 * 60));
+				const monthsDiff = Math.floor(hoursDiff / (24 * 30));
+
+				// Устанавливаем цвет в зависимости от временной разницы
+				if (hoursDiff <= 1) {
+				    console.log('Releases → '.green + data)
+				} else if (monthsDiff >= 1) {
+				    console.log('Releases → '.red + data)
+				} else {
+				    // В этом случае, если прошло более 1 часа, но менее 1 месяца
+				    // Вы можете выбрать другой цвет, если хотите
+				    console.log('Releases → '.yellow + data)
+				}
 		  }
 		});
 
@@ -384,7 +440,22 @@ async function run()
 		    console.error(err);
 		  } else {
 		  	last_pub_date_rss_stable = new Date(data);
-		    // console.log(data);
+		    
+		  	const timeDiff = currentDate.getTime() - last_pub_date_rss_stable.getTime();
+		  	// Преобразуем время в часы и месяцы
+				const hoursDiff = Math.floor(timeDiff / (1000 * 60 * 60));
+				const monthsDiff = Math.floor(hoursDiff / (24 * 30));
+
+				// Устанавливаем цвет в зависимости от временной разницы
+				if (hoursDiff <= 1) {
+				    console.log('Stable branch → '.green + data)
+				} else if (monthsDiff >= 1) {
+				    console.log('Stable branch → '.red + data)
+				} else {
+				    // В этом случае, если прошло более 1 часа, но менее 1 месяца
+				    // Вы можете выбрать другой цвет, если хотите
+				    console.log('Stable branch → '.yellow + data)
+				}
 		  }
 		});
 
@@ -394,7 +465,22 @@ async function run()
 		    console.error(err);
 		  } else {
 		  	last_pub_date_rss_testing = new Date(data);
-		    // console.log(data);
+		   
+		  	const timeDiff = currentDate.getTime() - last_pub_date_rss_testing.getTime();
+		  	// Преобразуем время в часы и месяцы
+				const hoursDiff = Math.floor(timeDiff / (1000 * 60 * 60));
+				const monthsDiff = Math.floor(hoursDiff / (24 * 30));
+
+				// Устанавливаем цвет в зависимости от временной разницы
+				if (hoursDiff <= 1) {
+				    console.log('Testing branch → '.green + data)
+				} else if (monthsDiff >= 1) {
+				    console.log('Testing branch → '.red + data)
+				} else {
+				    // В этом случае, если прошло более 1 часа, но менее 1 месяца
+				    // Вы можете выбрать другой цвет, если хотите
+				    console.log('Testing branch → '.yellow + data)
+				}
 		  }
 		});
 
@@ -404,22 +490,60 @@ async function run()
 		    console.error(err);
 		  } else {
 		  	last_pub_date_rss_unstable = new Date(data);
-		    // console.log(data);
+		    
+		  	const timeDiff = currentDate.getTime() - last_pub_date_rss_unstable.getTime();
+		  	// Преобразуем время в часы и месяцы
+				const hoursDiff = Math.floor(timeDiff / (1000 * 60 * 60));
+				const monthsDiff = Math.floor(hoursDiff / (24 * 30));
+
+				// Устанавливаем цвет в зависимости от временной разницы
+				if (hoursDiff <= 1) {
+				    console.log('Unstable branch → '.green + data)
+				} else if (monthsDiff >= 1) {
+				    console.log('Unstable branch → '.red + data)
+				} else {
+				    // В этом случае, если прошло более 1 часа, но менее 1 месяца
+				    // Вы можете выбрать другой цвет, если хотите
+				    console.log('Unstable branch → '.yellow + data)
+				}
 		  }
 		});
 
 		// Этот канал отвалился, ошибка 404
 		// setInterval(get_rss_feed, 6000);
-		// Изменил период проверки обновлений с 6 на 45 секунд,
+		// Изменил период проверки обновлений с 6 на 240 секунд,
 		// чтобы не насиловать свой и их серверы.
 		//
-		setInterval(get_rss_notices, 45000);
-		setInterval(get_rss_releases, 45000);
-		setInterval(get_rss_stable, 45000);
-		setInterval(get_rss_testing, 45000);
-		setInterval(get_rss_unstable, 45000);
+		setInterval(get_rss_notices, 240000);
+		setInterval(get_rss_releases, 240000);
+		setInterval(get_rss_stable, 240000);
+		setInterval(get_rss_testing, 240000);
+		setInterval(get_rss_unstable, 240000);
 
 }
 
 run();
-console.log('Бот запущен.');
+
+// Функция для вывода полоски загрузки
+function showLoading() {
+    // Определяем длину полоски загрузки
+    const loadingLength = process.stdout.columns || 50; // Получаем ширину терминала
+
+    // Выводим полоску загрузки
+    let loadingBar = '';
+    for (let i = 0; i < loadingLength; i++) {
+        loadingBar += '#'.black;
+    }
+    process.stdout.write(loadingBar);
+
+    // Ждем некоторое время перед заменой на сообщение
+    setTimeout(() => {
+        // Удаляем полоску загрузки и выводим сообщение
+        process.stdout.clearLine();  // Очищаем строку
+        process.stdout.cursorTo(0); // Перемещаем курсор в начало строки
+        console.log('\n✅ MEGA-BANHAMMER READY! v88.88.000'.green); // Выводим сообщение
+    }, 1000); // Задержка в миллисекундах перед заменой
+}
+
+// console.log('✅ MEGA-BANHAMMER READY!'.green);
+showLoading();
