@@ -21,14 +21,20 @@ let users = new Map();
 let last_messages_ids = "99,";
 
 
-// Оптимизированная структура для хранения дат публикаций RSS
+//
+//
+// Оптимизированная структура для хранения дат публикаций RSS.
+// Здесь же добавляем новые источники RSS!!!
+//
+//
 let last_pub_dates = {
     blog: null,
     notices: null,
     releases: null,
     stable: null,
     testing: null,
-    unstable: null
+    unstable: null,
+    opennet: null
 };
 
 // Переводим две минуты в миллисекунды (1 минута = 60 секунд = 60 000 миллисекунд)
@@ -61,13 +67,41 @@ function readyMessages(chat_id)
 		});
 }
 
+async function getMessagesWithRetry(chatId, maxRetries = 3) {
+    let attempt = 1;
+    
+    while (attempt <= maxRetries) {
+        try {
+            //console.log(`[INFO] Попытка ${attempt} получить сообщения (chat_id: ${chatId})...`);
+            
+            const result = await readyMessages(chatId);
+            
+            //console.log(`[SUCCESS] Сообщения получены успешно (попытка ${attempt})`);
+            return result; // Успех — возвращаем результат
+            
+        } catch (error) {
+            console.error(`[ERROR] Попытка ${attempt} не удалась:`, error.message);
+            
+            if (attempt < maxRetries) {
+                console.log(`[INFO] Ждёём 2 секунды перед повторной попыткой...`);
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Пауза 2 сек
+            } else {
+                console.error(`[FATAL] Все ${maxRetries} попытки исчерпаны. Не удалось получить сообщения.`);
+                throw error; // После всех попыток — пробрасываем ошибку дальше
+            }
+        }
+        
+        attempt++;
+    }
+}
+
 // Ищет в сообщених опасные команды,
 // даже если отредактировано старое сообщение
 async function warningDetector(chat_id)
 {
     const now = new Date();
     const randomId = now.getTime();
-    const a = await readyMessages(chat_id);
+    const a = await getMessagesWithRetry(chat_id);
     const danger_cmd_filters = [
         /rm\s.*[recursive|force]\s.*/i,
         /rm\s.*[/]\s.*/i,
@@ -111,7 +145,7 @@ async function processRssFeed({ url, lastPubKey, chatMsg, fileName }) {
             }
         });
     } catch (error) {
-        console.log('[err] ' + error);
+        console.log('[err] ' + error + ' (' + url + ')');
     }
 }
 
@@ -162,6 +196,18 @@ function get_rss_unstable() {
         lastPubKey: 'unstable',
         chatMsg: '‼ Обновление нестабильной ветки\n',
         fileName: 'feed_unstable.txt'
+    });
+}
+
+// 
+//  RSS FEED OPENNET!!! [UPD 1.01.2026]
+//
+function get_rss_opennet() {
+    processRssFeed({
+        url: 'https://www.opennet.ru/opennews/opennews_all_utf.rss',
+        lastPubKey: 'opennet',
+        chatMsg: '🐌 OpenNET\n',
+        fileName: 'feed_opennet.txt'
     });
 }
 
@@ -278,11 +324,13 @@ async function run() {
     printStatus('Stable branch →', 'feed_stable.txt', 'stable');
     printStatus('Testing branch →', 'feed_testing.txt', 'testing');
     printStatus('Unstable branch →', 'feed_unstable.txt', 'unstable');
-    setInterval(get_rss_notices, 240000);
+    printStatus('OpenNET →', 'feed_opennet.txt', 'opennet');
+    //setInterval(get_rss_notices, 240000); // отвалилось. [UPD] 1.01.2026
     setInterval(get_rss_releases, 240000);
     setInterval(get_rss_stable, 240000);
     setInterval(get_rss_testing, 240000);
     setInterval(get_rss_unstable, 240000);
+    setInterval(get_rss_opennet, 240000);
 }
 
 run();
