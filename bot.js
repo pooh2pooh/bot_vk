@@ -105,7 +105,15 @@ async function processRssFeed({ url, lastPubKey, chatMsg, fileName }) {
         for (const item of feed.items) {
             const postTime = new Date(item.isoDate);
             if (!lastPubDates[lastPubKey] || postTime - lastPubDates[lastPubKey] >= TWO_MINUTES) {
-                await sendMessage(CHAT_ID, chatMsg, item.link);
+                // Отправляем в чат событие из фида,
+                // и устанавливаем заголовок для OpenNET новости
+                //
+                //
+                const text =
+                    lastPubKey === 'opennet'
+                        ? `🐌 ${item.title}\n`
+                        : chatMsg;
+                await sendMessage(CHAT_ID, text, item.link);
                 lastPubDates[lastPubKey] = postTime;
                 await fs.writeFile(fileName, postTime.toISOString(), 'utf8');
             }
@@ -123,7 +131,7 @@ const rssFeeds = [
     { key: 'stable', url: 'https://forum.manjaro.org/c/announcements/stable-updates.rss', msg: '✅ Стабильное обновление \n', file: 'feed_stable.txt' },
     { key: 'testing', url: 'https://forum.manjaro.org/c/announcements/testing-updates.rss', msg: '⚠ Обновление тестовой ветки\n', file: 'feed_testing.txt' },
     { key: 'unstable', url: 'https://forum.manjaro.org/c/announcements/unstable-updates.rss', msg: '‼ Обновление нестабильной ветки\n', file: 'feed_unstable.txt' },
-    { key: 'opennet', url: 'https://www.opennet.ru/opennews/opennews_all_utf.rss', msg: '🐌 OpenNET\n', file: 'feed_opennet.txt' },
+    { key: 'opennet', url: 'https://www.opennet.ru/opennews/opennews_6_noadv.rss', msg: '🐌 OpenNET\n', file: 'feed_opennet.txt' },
 ];
 
 // Отправка сообщений
