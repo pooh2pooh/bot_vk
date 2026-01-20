@@ -125,13 +125,13 @@ async function processRssFeed({ url, lastPubKey, chatMsg, fileName }) {
 
 // Генерация функций для RSS
 const rssFeeds = [
-    { key: 'blog', url: 'https://blog.manjaro.org/feed/', msg: '📗 Новая запись в блоге \n', file: 'feed_blog.txt' },
+    //{ key: 'blog', url: 'https://blog.manjaro.org/feed/', msg: '📗 Новая запись в блоге \n', file: 'feed_blog.txt' },
     { key: 'notices', url: 'https://forum.manjaro.org/c/notices.rss', msg: '⚡ Важная заметка \n', file: 'feed_notices.txt' },
     { key: 'releases', url: 'https://forum.manjaro.org/c/announcements/releases.rss', msg: '👻 Новый релиз!\n', file: 'feed_releases.txt' },
     { key: 'stable', url: 'https://forum.manjaro.org/c/announcements/stable-updates.rss', msg: '✅ Стабильное обновление \n', file: 'feed_stable.txt' },
     { key: 'testing', url: 'https://forum.manjaro.org/c/announcements/testing-updates.rss', msg: '⚠ Обновление тестовой ветки\n', file: 'feed_testing.txt' },
     { key: 'unstable', url: 'https://forum.manjaro.org/c/announcements/unstable-updates.rss', msg: '‼ Обновление нестабильной ветки\n', file: 'feed_unstable.txt' },
-    { key: 'opennet', url: 'https://www.opennet.ru/opennews/opennews_6_noadv.rss', msg: '🐌 OpenNET\n', file: 'feed_opennet.txt' },
+    { key: 'opennet', url: 'https://www.opennet.ru/opennews/opennews_6_utf.rss', msg: '🐌 OpenNET\n', file: 'feed_opennet.txt' },
 ];
 
 // Отправка сообщений
