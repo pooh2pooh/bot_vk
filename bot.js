@@ -211,7 +211,7 @@ async function run() {
         for (const feed of rssFeeds) await printStatus(feed.key, feed.file, feed.key);
 
         // Запуск интервалов для RSS
-        for (const feed of rssFeeds) setInterval(() => processRssFeed({ url: feed.url, lastPubKey: feed.key, chatMsg: feed.msg, fileName: feed.file }), 2400);
+        for (const feed of rssFeeds) setInterval(() => processRssFeed({ url: feed.url, lastPubKey: feed.key, chatMsg: feed.msg, fileName: feed.file }), 240000);
 
         showLoading();
     } catch (err) {
