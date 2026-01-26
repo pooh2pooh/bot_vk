@@ -111,9 +111,13 @@ async function processRssFeed({ url, lastPubKey, chatMsg, fileName }) {
                 //
                 const text =
                     lastPubKey === 'opennet'
-                        ? `🐌 ${item.title}\n`
+                        ? `${item.title}\n`
                         : chatMsg;
-                await sendMessage(CHAT_ID, text, item.link);
+                const silent = 
+                    lastPubKey === 'opennet'
+                    ? true
+                    : false;
+                await sendMessage(CHAT_ID, text, item.link, silent);
                 lastPubDates[lastPubKey] = postTime;
                 await fs.writeFile(fileName, postTime.toISOString(), 'utf8');
             }
@@ -135,10 +139,10 @@ const rssFeeds = [
 ];
 
 // Отправка сообщений
-async function sendMessage(chatId, message, link) {
+async function sendMessage(chatId, message, link, silent = false) {
     try {
         const randomId = Date.now() + Math.floor(Math.random() * 10000) + 1;
-        await api.messages.send({ random_id: randomId, peer_id: chatId, message, attachment: [link] });
+        await api.messages.send({ random_id: randomId, peer_id: chatId, message, attachment: [link],  silent: silent});
     } catch (err) {
         log.error(`sendMessage failed: ${err}`);
     }
@@ -207,7 +211,7 @@ async function run() {
         for (const feed of rssFeeds) await printStatus(feed.key, feed.file, feed.key);
 
         // Запуск интервалов для RSS
-        for (const feed of rssFeeds) setInterval(() => processRssFeed({ url: feed.url, lastPubKey: feed.key, chatMsg: feed.msg, fileName: feed.file }), 240000);
+        for (const feed of rssFeeds) setInterval(() => processRssFeed({ url: feed.url, lastPubKey: feed.key, chatMsg: feed.msg, fileName: feed.file }), 2400);
 
         showLoading();
     } catch (err) {
