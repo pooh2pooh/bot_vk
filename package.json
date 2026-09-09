@@ -1,17 +1,26 @@
 {
-  "name": "bot_vk",
+  "name": "vk-feed-bot",
   "version": "1.0.0",
-  "description": "simple bot vk",
-  "main": "bot.js",
+  "description": "VK bot for forwarding new Manjaro RU Atom feed entries",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
   },
-  "author": "Pooh",
-  "license": "ISC",
   "dependencies": {
-    "colors": "^1.4.0",
-    "rss-parser": "^3.12.0",
-    "vk-io": "^4.3.2"
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^17.2.2",
+    "he": "^1.2.0",
+    "rss-parser": "^3.13.0",
+    "vk-io": "^4.10.1",
+    "yaml": "^2.8.1"
   },
-  "private": true
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/he": "^1.2.3",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
 }
