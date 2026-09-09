@@ -12,9 +12,7 @@ interface AtomItem {
   published?: string;
   updated?: string;
   content?: string;
-  author?: {
-    name?: string;
-  };
+  author?: string;
 }
 
 function stripHtml(value: string): string {
@@ -84,7 +82,7 @@ export class FeedReader {
             id,
             title,
             link,
-            author: normalizeText(item.author?.name ?? 'Неизвестный автор'),
+            author: normalizeText(item.author ?? 'Неизвестный автор'),
             content: normalizeText(item.content ?? ''),
             published: item.published ?? item.updated ?? new Date().toISOString(),
             updated: item.updated ?? item.published ?? new Date().toISOString()

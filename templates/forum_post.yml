@@ -1,10 +1,7 @@
 type: forum_post
 
 template: |
-  💬 {title}
-
-  👤 {author}
-
+  💬 {title} 👤 {author}
   {content}
 
   🔗 {link}

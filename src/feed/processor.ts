@@ -88,29 +88,15 @@ export class FeedProcessor {
       throw new Error('Feed contains no entries.');
     }
 
-    const latest = [...entries].sort(
-      (a, b) =>
-        new Date(b.published).getTime() -
-        new Date(a.published).getTime()
-    )[0];
+    // В RSS/Atom новые записи обычно идут первыми — берём сразу первый
+    const latest = entries[0];
 
-    /*
-     * На случай, если запись появилась во внешнем фиде,
-     * но ещё не успела попасть в нашу БД.
-     */
     if (!this.db.hasFeedEntry(latest.id)) {
       this.db.addFeedEntry(latest);
     }
 
-    const message = this.templates.render(
-      'forum_post',
-      latest
-    );
-
-    await this.sender.send(
-      this.targetChat,
-      message
-    );
+    const message = this.templates.render('forum_post', latest);
+    await this.sender.send(this.targetChat, message);
 
     this.logger.info(
       `Latest post resent: "${latest.title}" (${latest.id})`
