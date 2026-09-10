@@ -59,15 +59,11 @@ export class FeedProcessor {
     );
 
     for (const entry of sorted) {
-      if (this.db.hasFeedEntry(entry.id)) {
-        if (this.db.getEntrySentStatus(entry.id)) {
-          continue;
-        }
-
-        await this.processNewEntry(entry);
-        sent++;
-        continue;
+      if (this.db.hasFeedEntry(entry.id) && this.db.getEntrySentStatus(entry.id)) {
+        continue;  // уже отправлен (есть в БД и статус Отправлен)
       }
+      await this.processNewEntry(entry);
+      sent++;
     }
 
     if (sent > 0) {
@@ -97,6 +93,7 @@ export class FeedProcessor {
 
     const message = this.templates.render('forum_post', latest);
     await this.sender.send(this.targetChat, message);
+    this.db.markSent(latest.id);  // ← изменяем статус в БД на Отправлено
 
     this.logger.info(
       `Latest post resent: "${latest.title}" (${latest.id})`
