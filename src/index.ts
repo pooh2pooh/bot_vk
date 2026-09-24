@@ -13,12 +13,8 @@ import { ScreenshotFeedReader } from './feed/screenshot-reader.js';
 import { FeedProcessor } from './feed/processor.js';
 
 import { TemplateManager } from './templates/manager.js';
-
 import { CommandHandler } from './commands/handler.js';
-
-const SCREENSHOTS_FEED_URL =
-  process.env.SCREENSHOTS_FEED_URL ??
-  'https://www.linux.org.ru/section-rss.jsp?section=3&group=19393';
+import { OpenRouterCommentService } from './ai/openrouter.js';
 
 async function main(): Promise<void> {
   await mkdir('data', { recursive: true });
@@ -27,12 +23,6 @@ async function main(): Promise<void> {
     config.databasePath
   );
 
-  /*
-   * Владелец добавляется автоматически.
-   *
-   * Поэтому после удаления bot.db и нового запуска
-   * OWNER_ID снова получает права владельца.
-   */
   db.addAdmin(
     config.ownerId,
     'owner'
@@ -42,7 +32,12 @@ async function main(): Promise<void> {
     config.vkToken
   );
 
-  const sender = new VKSender(vk);
+  const sender = new VKSender(
+    vk,
+    3,
+    config.imageDownloadTimeoutMs,
+    config.vkUploadTimeoutMs
+  );
   const logger = new Logger(
     sender,
     config.adminChat,
@@ -60,6 +55,17 @@ async function main(): Promise<void> {
 
   await templates.load();
 
+  const ai = new OpenRouterCommentService(
+    config.openRouterApiKey,
+    config.openRouterModel,
+    config.openRouterModelName,
+    config.openRouterPromptPath,
+    config.openRouterTimeoutMs,
+    config.openRouterMaxTokens
+  );
+
+  await ai.loadPrompt();
+
   const forumReader =
     new FeedReader(
       config.feedUrl,
@@ -68,7 +74,7 @@ async function main(): Promise<void> {
 
   const screenshotReader =
     new ScreenshotFeedReader(
-      SCREENSHOTS_FEED_URL,
+      config.screenshotFeedUrl,
       config.requestTimeoutMs
     );
 
@@ -91,7 +97,8 @@ async function main(): Promise<void> {
       sender,
       logger,
       config.targetChat,
-      'screenshots'
+      'screenshots',
+      ai
     );
 
   const commands =
@@ -100,15 +107,10 @@ async function main(): Promise<void> {
       forumProcessor,
       templates,
       logger,
-      config.adminChat
+      config.adminChat,
+      ai
     );
 
-  /*
-   * На каждом запуске оба текущих снимка фидов
-   * заносятся/помечаются как ignored.
-   *
-   * Поэтому бот после рестарта не пересылает старые записи.
-   */
   try {
     await forumProcessor.initialize();
     await screenshotProcessor.initialize();
@@ -120,13 +122,9 @@ async function main(): Promise<void> {
           : String(error)
       }`
     );
-
     throw error;
   }
 
-  /*
-   * VK updates.
-   */
   vk.updates.on(
     'message_new',
     async ctx => {
@@ -144,17 +142,16 @@ async function main(): Promise<void> {
     }
   );
 
-  /*
-   * Запускаем long poll.
-   */
   await vk.updates.start();
+
   await logger.info(
     [
       'Bot started.',
       `Target chat: ${config.targetChat}`,
       `Admin chat: ${config.adminChat}`,
       `Forum feed: ${config.feedUrl}`,
-      `Screenshots feed: ${SCREENSHOTS_FEED_URL}`,
+      `Screenshots feed: ${config.screenshotFeedUrl}`,
+      `AI model: ${config.openRouterModel}`,
       `Poll interval: ${config.pollIntervalMs} ms`
     ].join('\n')
   );
@@ -181,7 +178,6 @@ async function main(): Promise<void> {
     }
 
     db.close();
-
     process.exit(0);
   };
 

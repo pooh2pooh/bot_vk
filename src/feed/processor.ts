@@ -7,6 +7,7 @@ import type {
   FeedEntry,
   FeedSource
 } from '../types.js';
+import type { OpenRouterCommentService } from '../ai/openrouter.js';
 
 export interface FeedSourceReader {
   read(): Promise<FeedEntry[]>;
@@ -20,7 +21,8 @@ export class FeedProcessor {
     private readonly sender: VKSender,
     private readonly logger: Logger,
     private readonly targetChat: number,
-    private readonly source: FeedSource = 'forum'
+    private readonly source: FeedSource = 'forum',
+    private readonly ai?: OpenRouterCommentService
   ) {}
 
   async initialize(): Promise<void> {
@@ -38,7 +40,6 @@ export class FeedProcessor {
       /*
        * При старте текущий снимок фида считается уже обработанным.
        * Это НЕ ставит sent_at: запись не считается отправленной в VK.
-       * Она просто больше не считается кандидатом на автоматическую отправку.
        */
       if (
         !this.db.getEntrySentStatus(entry.id) &&
@@ -64,13 +65,12 @@ export class FeedProcessor {
 
     if (entries.length === 0) {
       this.logger.warn(
-        `Feed returned no entries (${this.source}).`,
+        `Feed returned no entries (${this.source}).`
       );
       return 0;
     }
 
     let sent = 0;
-
     const sorted = [...entries].sort(
       (a, b) =>
         new Date(a.published).getTime() -
@@ -91,18 +91,8 @@ export class FeedProcessor {
             `ignored=${this.db.getEntryIgnoredStatus(entry.id)}`
           ].join(' ')
         );
-
         continue;
       }
-
-      this.logger.debug(
-        [
-          `Sending entry (${this.source}):`,
-          `"${entry.title}"`,
-          `id=${entry.id}`,
-          `images=${entry.imageUrls.length}`
-        ].join(' ')
-      );
 
       await this.processNewEntry(entry);
       sent++;
@@ -122,8 +112,6 @@ export class FeedProcessor {
   }
 
   async resendLatest(): Promise<FeedEntry> {
-    // Важно: берём запись из БД, а не первый элемент живого RSS.
-    // Поэтому /feed resend-last больше не "прыгает" между постами.
     const latest = this.db.getLatestEntry(
       this.source
     );
@@ -134,12 +122,12 @@ export class FeedProcessor {
       );
     }
 
-    const templateType = this.getTemplateType(
-      latest
-    );
+    const prepared =
+      await this.prepareEntry(latest);
+
     const message = this.templates.render(
-      templateType,
-      latest
+      this.getTemplateType(latest),
+      prepared.entry
     );
 
     await this.sender.send(
@@ -150,9 +138,21 @@ export class FeedProcessor {
 
     this.db.markSent(latest.id);
 
-    this.logger.info(
-      `Latest post resent (${this.source}): "${latest.title}" (${latest.id})`
-    );
+    if (prepared.ai) {
+      this.logAiSuccess(
+        latest,
+        prepared.ai.durationMs,
+        true
+      );
+    } else {
+      this.logger.info(
+        [
+          `Latest post resent (${this.source}):`,
+          `"${latest.title}"`,
+          prepared.aiFailed ? 'AI: fallback на оригинальный текст' : ''
+        ].filter(Boolean).join(' ')
+      );
+    }
 
     return latest;
   }
@@ -171,12 +171,12 @@ export class FeedProcessor {
     this.db.addFeedEntry(entry);
 
     try {
-      const template = this.getTemplateType(
-        entry
-      );
+      const prepared =
+        await this.prepareEntry(entry);
+
       const message = this.templates.render(
-        template,
-        entry
+        this.getTemplateType(entry),
+        prepared.entry
       );
 
       await this.sender.send(
@@ -186,29 +186,94 @@ export class FeedProcessor {
       );
 
       this.db.markSent(entry.id);
-      this.logger.info(
-        [
-          `New post sent (${entry.source}):`,
-          `"${entry.title}"`,
-          `by ${entry.author}`,
-          `images=${entry.imageUrls.length}`
-        ].join(' ')
-      );
+
+      if (prepared.ai) {
+        this.logAiSuccess(
+          entry,
+          prepared.ai.durationMs,
+          false
+        );
+      } else {
+        this.logger.info(
+          [
+            `New post sent (${entry.source}):`,
+            `"${entry.title}"`,
+            `by ${entry.author}`,
+            `images=${entry.imageUrls.length}`,
+            prepared.aiFailed ? 'AI: fallback на оригинальный текст' : ''
+          ].filter(Boolean).join(' ')
+        );
+      }
     } catch (error) {
+      // Ошибку логирует внешний цикл, чтобы не дублировать
+      // одно и то же событие в админ-чате.
+      throw error;
+    }
+  }
+
+  private async prepareEntry(
+    entry: FeedEntry
+  ): Promise<{
+    entry: FeedEntry;
+    ai: Awaited<ReturnType<OpenRouterCommentService['generate']>> | null;
+    aiFailed: boolean;
+  }> {
+    if (
+      entry.source !== 'screenshots' ||
+      !this.ai
+    ) {
+      return {
+        entry,
+        ai: null,
+        aiFailed: false
+      };
+    }
+
+    try {
+      const ai = await this.ai.generate(entry);
+
+      return {
+        entry: {
+          ...entry,
+          // Автором комментария считается модель.
+          author: ai.model,
+          // Вместо оригинального текста показываем комментарий ИИ.
+          content: ai.comment
+        },
+        ai,
+        aiFailed: false
+      };
+    } catch (error) {
+      // AI не должен блокировать пересылку самого скриншота.
       this.logger.error(
-        `Failed to send post "${entry.title}" (${entry.source}): ${
+        `AI comment failed for \"${entry.title}\": ${
           error instanceof Error
             ? error.message
             : String(error)
         }`
       );
 
-      /*
-       * Запись остаётся в БД.
-       * sent_at и ignored_at не устанавливаются.
-       * Поэтому следующий check попробует её снова.
-       */
-      throw error;
+      return {
+        entry,
+        ai: null,
+        aiFailed: true
+      };
     }
+  }
+
+  private logAiSuccess(
+    entry: FeedEntry,
+    durationMs: number,
+    resend: boolean
+  ): void {
+    this.logger.info(
+      [
+        '📸 Скриншот переслан',
+        `Название: ${entry.title}`,
+        `Модель: ${this.ai?.getModelName() ?? 'AI'}`,
+        `Время ответа AI: ${(durationMs / 1000).toFixed(2)} с`,
+        resend ? 'Режим: повторная отправка' : 'Режим: автоматическая отправка'
+      ].join('\n')
+    );
   }
 }

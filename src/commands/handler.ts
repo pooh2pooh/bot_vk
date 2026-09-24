@@ -4,6 +4,7 @@ import type { BotDatabase } from '../db/database.js';
 import type { FeedProcessor } from '../feed/processor.js';
 import type { TemplateManager } from '../templates/manager.js';
 import type { Logger } from '../logger/logger.js';
+import type { OpenRouterCommentService } from '../ai/openrouter.js';
 
 export class CommandHandler {
   constructor(
@@ -11,7 +12,8 @@ export class CommandHandler {
     private readonly processor: FeedProcessor,
     private readonly templates: TemplateManager,
     private readonly logger: Logger,
-    private readonly adminChat: number
+    private readonly adminChat: number,
+    private readonly ai: OpenRouterCommentService
   ) {}
 
   async handle(ctx: Context): Promise<void> {
@@ -26,7 +28,6 @@ export class CommandHandler {
     }
 
     const senderId = ctx.senderId;
-
     if (!this.db.isAdmin(senderId)) {
       await ctx.send('⛔ У вас нет прав администратора.');
       return;
@@ -54,6 +55,10 @@ export class CommandHandler {
 
         case '/template':
           await this.template(ctx, args);
+          break;
+
+        case '/ai':
+          await this.aiCommand(ctx, args);
           break;
 
         default:
@@ -90,7 +95,10 @@ export class CommandHandler {
         '/admin add ID — добавить администратора',
         '/admin remove ID — удалить администратора',
         '',
-        '/template reload — перечитать шаблоны'
+        '/template reload — перечитать шаблоны',
+        '',
+        '/ai status — текущая AI-модель',
+        '/ai reload — перечитать AI-промпт'
       ].join('\n')
     );
   }
@@ -126,7 +134,6 @@ export class CommandHandler {
             ? `✅ Отправлено новых постов: ${count}`
             : '✅ Новых постов нет.'
         );
-
         return;
       }
 
@@ -141,7 +148,6 @@ export class CommandHandler {
         await ctx.send(
           `✅ Последний пост повторно отправлен:\n${entry.title}`
         );
-
         return;
       }
 
@@ -150,6 +156,42 @@ export class CommandHandler {
           'Использование:\n' +
           '/feed check\n' +
           '/feed resend-last'
+        );
+    }
+  }
+
+  private async aiCommand(
+    ctx: Context,
+    args: string[]
+  ): Promise<void> {
+    switch (args[0]) {
+      case 'status':
+        await ctx.send(
+          [
+            '🤖 AI',
+            '',
+            `Модель: ${this.ai.getModelName()}`,
+            `ID: ${this.ai.getModel()}`,
+            `Промпт: ${this.ai.getPromptPath()}`
+          ].join('\n')
+        );
+        return;
+
+      case 'reload':
+        await this.ai.loadPrompt();
+        await ctx.send(
+          '✅ AI-промпт перечитан.'
+        );
+        this.logger.info(
+          `AI prompt reloaded by ${ctx.senderId}.`
+        );
+        return;
+
+      default:
+        await ctx.send(
+          'Использование:\n' +
+          '/ai status\n' +
+          '/ai reload'
         );
     }
   }
@@ -163,7 +205,6 @@ export class CommandHandler {
     switch (action) {
       case 'list': {
         const admins = this.db.getAdmins();
-
         const lines = admins.map(
           admin =>
             `${admin.role === 'owner' ? '👑' : '👤'} ` +
@@ -177,7 +218,6 @@ export class CommandHandler {
             ...lines
           ].join('\n')
         );
-
         return;
       }
 
@@ -207,7 +247,6 @@ export class CommandHandler {
         this.logger.info(
           `Admin ${ctx.senderId} added administrator ${id}.`
         );
-
         return;
       }
 
@@ -251,7 +290,6 @@ export class CommandHandler {
         this.logger.info(
           `Admin ${ctx.senderId} removed administrator ${id}.`
         );
-
         return;
       }
 

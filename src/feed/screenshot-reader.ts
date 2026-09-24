@@ -11,7 +11,6 @@ import {
 const { decode } = he;
 
 const LINUX_ORG_RU = 'https://www.linux.org.ru';
-const REQUIRED_TAG = 'manjaro';
 
 function normalizeUrl(
   value: string,

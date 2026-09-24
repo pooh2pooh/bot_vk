@@ -1,7 +1,8 @@
 type: screenshot_post
 
 template: |
-  📸 {title} · 👤 {author}
   {content}
+  — 🤖 {author}
 
-  🔗 {link}
+  📸 {title}
+  {link}
