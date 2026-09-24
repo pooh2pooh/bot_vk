@@ -9,11 +9,16 @@ import { VKSender } from './vk/sender.js';
 import { Logger } from './logger/logger.js';
 
 import { FeedReader } from './feed/reader.js';
+import { ScreenshotFeedReader } from './feed/screenshot-reader.js';
 import { FeedProcessor } from './feed/processor.js';
 
 import { TemplateManager } from './templates/manager.js';
 
 import { CommandHandler } from './commands/handler.js';
+
+const SCREENSHOTS_FEED_URL =
+  process.env.SCREENSHOTS_FEED_URL ??
+  'https://www.linux.org.ru/section-rss.jsp?section=3&group=19393';
 
 async function main(): Promise<void> {
   await mkdir('data', { recursive: true });
@@ -38,7 +43,6 @@ async function main(): Promise<void> {
   );
 
   const sender = new VKSender(vk);
-
   const logger = new Logger(
     sender,
     config.adminChat,
@@ -56,40 +60,58 @@ async function main(): Promise<void> {
 
   await templates.load();
 
-  const reader =
+  const forumReader =
     new FeedReader(
       config.feedUrl,
       config.requestTimeoutMs
     );
 
-  const processor =
+  const screenshotReader =
+    new ScreenshotFeedReader(
+      SCREENSHOTS_FEED_URL,
+      config.requestTimeoutMs
+    );
+
+  const forumProcessor =
     new FeedProcessor(
-      reader,
+      forumReader,
       db,
       templates,
       sender,
       logger,
-      config.targetChat
+      config.targetChat,
+      'forum'
+    );
+
+  const screenshotProcessor =
+    new FeedProcessor(
+      screenshotReader,
+      db,
+      templates,
+      sender,
+      logger,
+      config.targetChat,
+      'screenshots'
     );
 
   const commands =
     new CommandHandler(
       db,
-      processor,
+      forumProcessor,
       templates,
       logger,
       config.adminChat
     );
 
   /*
-   * ВАЖНО:
+   * На каждом запуске оба текущих снимка фидов
+   * заносятся/помечаются как ignored.
    *
-   * Первый запуск НЕ отправляет старые записи.
-   *
-   * Все существующие записи только заносятся в БД.
+   * Поэтому бот после рестарта не пересылает старые записи.
    */
   try {
-    await processor.initialize();
+    await forumProcessor.initialize();
+    await screenshotProcessor.initialize();
   } catch (error) {
     await logger.error(
       `Initial feed load failed: ${
@@ -126,26 +148,17 @@ async function main(): Promise<void> {
    * Запускаем long poll.
    */
   await vk.updates.start();
-
   await logger.info(
     [
       'Bot started.',
       `Target chat: ${config.targetChat}`,
       `Admin chat: ${config.adminChat}`,
-      `Feed: ${config.feedUrl}`,
+      `Forum feed: ${config.feedUrl}`,
+      `Screenshots feed: ${SCREENSHOTS_FEED_URL}`,
       `Poll interval: ${config.pollIntervalMs} ms`
     ].join('\n')
   );
 
-  /*
-   * Основной цикл проверки Atom.
-   *
-   * setTimeout вместо setInterval:
-   * следующий запуск начинается только после
-   * завершения предыдущего.
-   *
-   * Это исключает наложение двух проверок.
-   */
   let stopped = false;
 
   const shutdown = async (
@@ -188,10 +201,22 @@ async function main(): Promise<void> {
     }
 
     try {
-      await processor.check();
+      await forumProcessor.check();
     } catch (error) {
       await logger.error(
-        `Feed check failed: ${
+        `Forum feed check failed: ${
+          error instanceof Error
+            ? error.message
+            : String(error)
+        }`
+      );
+    }
+
+    try {
+      await screenshotProcessor.check();
+    } catch (error) {
+      await logger.error(
+        `Screenshot feed check failed: ${
           error instanceof Error
             ? error.message
             : String(error)

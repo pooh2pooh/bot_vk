@@ -1,67 +1,39 @@
-# 🤖 VK Feed Bot: курьер новостей из RSS
+# bot_vk — LOR Manjaro screenshots feed
 
-Бот для ВКонтакте, берёт свежие посты из RSS-фидов и аккуратно доставляет их в чат.
+## Files to replace
 
-> 💡 Идея простая: RSS → VK. Реализация чуть сложнее, но мы справились. 😎
+- `src/types.ts`
+- `src/feed/reader.ts`
+- `src/feed/screenshot-reader.ts` (new)
+- `src/feed/processor.ts`
+- `src/db/database.ts`
+- `src/vk/sender.ts`
+- `src/index.ts`
+- `src/templates/manager.ts` (required additional change)
+- `templates/screenshot_post.yml` (new)
 
----
+## Optional environment variable
 
-## 🚀 Что умеет
-
-- **Мониторинг RSS/Atom-фидов** — следит за обновлениями и не пропускает новые посты.
-- **Умная дедупликация** — не спамит повторами: проверяет ID записи в SQLite и отправляет только новинки.
-- **Форматирование постов** — рендерит шаблоны сообщений (например, для форума/новостей) и красиво упаковывает в VK.
-- **Стабильность 24/7** — работает под PM2: упал — перезапустился, сервер перезагрузился — сам поднялся.
-- **Логирование** — всё, что происходит, аккуратно пишется в логи: удобно искать, где споткнулся.
-
----
-
-## 🛠️ Установка и запуск
-
-### Шаг 1. Подготовка
-Тебе понадобятся:
-- Node.js (LTS, желательно 20+ или 22+)
-- npm / pnpm
-- PM2 (для запуска в фоне)
-- Базовые утилиты для сборки нативных модулей (`base-devel` или `build-essential`)
-
-### Шаг 2. Клонируй репозиторий
-```bash
-git clone https://github.com/pooh2pooh/bot_vk.git
-cd bot_vk
+```env
+SCREENSHOTS_FEED_URL=https://www.linux.org.ru/section-rss.jsp?section=3&group=19393
 ```
 
-### Шаг 3. Установи зависимости
-```bash
-npm install
-```
+The code has the same URL as a fallback, so adding the variable is optional.
 
-### Шаг 4. Настрой окружение
-Скопируй шаблон:
-```bash
-cp .env.example .env
-```
+## Existing `data/bot.db`
 
-Заполни `.env`:
-* `VK_TOKEN` — токен сообщества/пользователя
-* `TARGET_CHAT_ID` — ID чата или беседы, куда слать посты
-* `ADMIN_CHAT` — ID чата с админами, отсюда писать команды боту и читать лог
-* `OWNER_ID` — ID владельца бота
-* `FEED_URL` — URL твоего RSS/Atom фида
-* Остальные поля — по желанию
+Do not delete it. The new database code performs an automatic migration and adds:
 
-### Шаг 5. Собери и запусти
-```bash
-npm run build
-npm start
-```
+- `source`
+- `image_urls_json`
+- `ignored_at`
 
-## 🏗️ Архитектура
+Existing entries are treated as forum entries.
 
-Проект построен по модульному принципу — чтобы было легко расширять и не сойти с ума при поддержке:
+## Behaviour
 
-* `src/reader` — модуль чтения RSS/Atom: абстрагирует парсинг и нормализацию данных.
-* `src/db` — слой базы данных на better-sqlite3: хранит ID уже отправленных постов.
-* `src/templates` — шаблонизатор: превращает данные поста в красивое сообщение.
-* `src/sender` — отправка в VK через API: инкапсулирует вызовы и обработку ошибок.
-* `src/bot` — ядро бота: связывает все модули и управляет логикой обновлений.
+- First startup/restart: current feed entries are stored/marked ignored and are not sent.
+- After initialization: only entries not known to the database are sent.
+- Failed sends stay pending and are retried.
+- `/feed resend-last` reads the latest saved forum entry from SQLite rather than the first live RSS item.
+- LOR screenshots with the `manjaro` tag are sent with images.

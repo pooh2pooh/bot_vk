@@ -2,7 +2,23 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import type { Admin, FeedEntry } from '../types.js';
+import type {
+  Admin,
+  FeedEntry,
+  FeedSource
+} from '../types.js';
+
+interface FeedEntryRow {
+  id: string;
+  title: string;
+  link: string;
+  author: string;
+  content: string;
+  published: string;
+  updated: string;
+  source: FeedSource;
+  image_urls_json: string;
+}
 
 export class BotDatabase {
   private readonly db: Database.Database;
@@ -30,7 +46,10 @@ export class BotDatabase {
         published TEXT NOT NULL,
         updated TEXT NOT NULL,
         first_seen_at TEXT NOT NULL,
-        sent_at TEXT
+        sent_at TEXT,
+        source TEXT NOT NULL DEFAULT 'forum',
+        image_urls_json TEXT NOT NULL DEFAULT '[]',
+        ignored_at TEXT
       );
 
       CREATE TABLE IF NOT EXISTS admins (
@@ -50,6 +69,44 @@ export class BotDatabase {
       CREATE INDEX IF NOT EXISTS idx_feed_entries_sent
       ON feed_entries(sent_at);
     `);
+
+    // Миграция существующей bot.db.
+    this.addColumnIfMissing(
+      'source',
+      "TEXT NOT NULL DEFAULT 'forum'"
+    );
+    this.addColumnIfMissing(
+      'image_urls_json',
+      "TEXT NOT NULL DEFAULT '[]'"
+    );
+    this.addColumnIfMissing(
+      'ignored_at',
+      'TEXT'
+    );
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_feed_entries_source_published
+      ON feed_entries(source, published);
+    `);
+  }
+
+  private addColumnIfMissing(
+    column: string,
+    definition: string
+  ): void {
+    const columns = this.db
+      .prepare('PRAGMA table_info(feed_entries)')
+      .all() as Array<{ name: string }>;
+
+    if (
+      columns.some(existing => existing.name === column)
+    ) {
+      return;
+    }
+
+    this.db.exec(
+      `ALTER TABLE feed_entries ADD COLUMN ${column} ${definition}`
+    );
   }
 
   close(): void {
@@ -80,9 +137,11 @@ export class BotDatabase {
           content,
           published,
           updated,
-          first_seen_at
+          first_seen_at,
+          source,
+          image_urls_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         entry.id,
@@ -92,7 +151,9 @@ export class BotDatabase {
         entry.content,
         entry.published,
         entry.updated,
-        new Date().toISOString()
+        new Date().toISOString(),
+        entry.source,
+        JSON.stringify(entry.imageUrls)
       );
   }
 
@@ -100,13 +161,27 @@ export class BotDatabase {
     this.db
       .prepare(`
         UPDATE feed_entries
-        SET sent_at = ?
+        SET sent_at = ?,
+            ignored_at = NULL
         WHERE id = ?
       `)
       .run(new Date().toISOString(), id);
   }
 
-  getLatestEntry(): FeedEntry | null {
+  markIgnored(id: string): void {
+    this.db
+      .prepare(`
+        UPDATE feed_entries
+        SET ignored_at = ?
+        WHERE id = ?
+          AND sent_at IS NULL
+      `)
+      .run(new Date().toISOString(), id);
+  }
+
+  getLatestEntry(
+    source: FeedSource = 'forum'
+  ): FeedEntry | null {
     const row = this.db
       .prepare(`
         SELECT
@@ -116,14 +191,17 @@ export class BotDatabase {
           author,
           content,
           published,
-          updated
+          updated,
+          source,
+          image_urls_json
         FROM feed_entries
-        ORDER BY published DESC
+        WHERE source = ?
+        ORDER BY published DESC, first_seen_at DESC
         LIMIT 1
       `)
-      .get() as FeedEntry | undefined;
+      .get(source) as FeedEntryRow | undefined;
 
-    return row ?? null;
+    return row ? this.toFeedEntry(row) : null;
   }
 
   getEntry(id: string): FeedEntry | null {
@@ -136,14 +214,47 @@ export class BotDatabase {
           author,
           content,
           published,
-          updated
+          updated,
+          source,
+          image_urls_json
         FROM feed_entries
         WHERE id = ?
         LIMIT 1
       `)
-      .get(id) as FeedEntry | undefined;
+      .get(id) as FeedEntryRow | undefined;
 
-    return row ?? null;
+    return row ? this.toFeedEntry(row) : null;
+  }
+
+  private toFeedEntry(row: FeedEntryRow): FeedEntry {
+    let imageUrls: string[] = [];
+
+    try {
+      const parsed = JSON.parse(
+        row.image_urls_json
+      ) as unknown;
+
+      if (Array.isArray(parsed)) {
+        imageUrls = parsed.filter(
+          (value): value is string =>
+            typeof value === 'string'
+        );
+      }
+    } catch {
+      imageUrls = [];
+    }
+
+    return {
+      id: row.id,
+      title: row.title,
+      link: row.link,
+      author: row.author,
+      content: row.content,
+      published: row.published,
+      updated: row.updated,
+      source: row.source,
+      imageUrls
+    };
   }
 
   getEntrySentStatus(id: string): boolean {
@@ -159,7 +270,41 @@ export class BotDatabase {
     return Boolean(row?.sent_at);
   }
 
-  addAdmin(userId: number, role: 'owner' | 'admin' = 'admin'): void {
+  getEntryIgnoredStatus(id: string): boolean {
+    const row = this.db
+      .prepare(`
+        SELECT ignored_at
+        FROM feed_entries
+        WHERE id = ?
+        LIMIT 1
+      `)
+      .get(id) as { ignored_at: string | null } | undefined;
+
+    return Boolean(row?.ignored_at);
+  }
+
+  getEntryHandledStatus(id: string): boolean {
+    const row = this.db
+      .prepare(`
+        SELECT sent_at, ignored_at
+        FROM feed_entries
+        WHERE id = ?
+        LIMIT 1
+      `)
+      .get(id) as {
+        sent_at: string | null;
+        ignored_at: string | null;
+      } | undefined;
+
+    return Boolean(
+      row?.sent_at || row?.ignored_at
+    );
+  }
+
+  addAdmin(
+    userId: number,
+    role: 'owner' | 'admin' = 'admin'
+  ): void {
     this.db
       .prepare(`
         INSERT INTO admins (

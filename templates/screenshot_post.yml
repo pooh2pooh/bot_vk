@@ -1,0 +1,7 @@
+type: screenshot_post
+
+template: |
+  📸 {title} · 👤 {author}
+  {content}
+
+  🔗 {link}

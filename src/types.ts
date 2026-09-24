@@ -1,4 +1,10 @@
-export type ContentType = 'forum_post';
+export type ContentType =
+  | 'forum_post'
+  | 'screenshot_post';
+
+export type FeedSource =
+  | 'forum'
+  | 'screenshots';
 
 export interface FeedEntry {
   id: string;
@@ -8,6 +14,8 @@ export interface FeedEntry {
   content: string;
   published: string;
   updated: string;
+  source: FeedSource;
+  imageUrls: string[];
 }
 
 export interface TemplateData {

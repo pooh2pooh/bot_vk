@@ -15,7 +15,10 @@ interface TemplateFile {
 }
 
 export class TemplateManager {
-  private readonly templates = new Map<ContentType, string>();
+  private readonly templates = new Map<
+    ContentType,
+    string
+  >();
 
   constructor(
     private readonly templatesPath: string
@@ -23,28 +26,53 @@ export class TemplateManager {
 
   async load(): Promise<void> {
     this.templates.clear();
-
     await this.loadTemplate('forum_post');
+    await this.loadTemplate('screenshot_post');
   }
 
-  private async loadTemplate(type: ContentType): Promise<void> {
-    const path = join(this.templatesPath, `${type}.yml`);
-    const source = await readFile(path, 'utf8');
+  private async loadTemplate(
+    type: ContentType
+  ): Promise<void> {
+    const path = join(
+      this.templatesPath,
+      `${type}.yml`
+    );
 
-    const data = YAML.parse(source) as TemplateFile;
+    const source = await readFile(
+      path,
+      'utf8'
+    );
 
-    if (!data.template || typeof data.template !== 'string') {
-      throw new Error(`Invalid template: ${path}`);
+    const data = YAML.parse(
+      source
+    ) as TemplateFile;
+
+    if (
+      !data.template ||
+      typeof data.template !== 'string'
+    ) {
+      throw new Error(
+        `Invalid template: ${path}`
+      );
     }
 
-    this.templates.set(type, data.template);
+    this.templates.set(
+      type,
+      data.template
+    );
   }
 
-  render(type: ContentType, entry: FeedEntry): string {
-    const template = this.templates.get(type);
+  render(
+    type: ContentType,
+    entry: FeedEntry
+  ): string {
+    const template =
+      this.templates.get(type);
 
     if (!template) {
-      throw new Error(`Template not found: ${type}`);
+      throw new Error(
+        `Template not found: ${type}`
+      );
     }
 
     const data: TemplateData = {
