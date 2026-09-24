@@ -136,6 +136,7 @@ export class FeedProcessor {
       latest.imageUrls
     );
 
+    this.logImageFailures(latest);
     this.db.markSent(latest.id);
 
     if (prepared.ai) {
@@ -185,6 +186,7 @@ export class FeedProcessor {
         entry.imageUrls
       );
 
+      this.logImageFailures(entry);
       this.db.markSent(entry.id);
 
       if (prepared.ai) {
@@ -258,6 +260,19 @@ export class FeedProcessor {
         ai: null,
         aiFailed: true
       };
+    }
+  }
+
+  private logImageFailures(entry: FeedEntry): void {
+    for (const failure of this.sender.consumeImageErrors()) {
+      this.logger.error(
+        [
+          '🖼 Ошибка загрузки изображения',
+          `Пост: ${entry.title}`,
+          `URL: ${failure.url}`,
+          `Причина: ${failure.message}`
+        ].join('\n')
+      );
     }
   }
 

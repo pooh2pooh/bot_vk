@@ -5,13 +5,25 @@ import type { VK } from 'vk-io';
 const VK_MAX_ATTACHMENTS_PER_MESSAGE = 10;
 const IMAGE_DOWNLOAD_RETRIES = 3;
 
+export interface ImageDownloadFailure {
+  url: string;
+  message: string;
+}
+
 export class VKSender {
+  private readonly imageErrors: ImageDownloadFailure[] = [];
+
   constructor(
     private readonly vk: VK,
     private readonly retries = 3,
     private readonly imageDownloadTimeoutMs = 60_000,
     private readonly uploadTimeoutMs = 90_000
   ) {}
+
+  /** Забирает ошибки картинок после send() и очищает накопитель. */
+  consumeImageErrors(): ImageDownloadFailure[] {
+    return this.imageErrors.splice(0);
+  }
 
   async send(
     peerId: number,
@@ -81,9 +93,23 @@ export class VKSender {
         const attachments = [];
 
         for (const imageUrl of imageUrls) {
-          const image = await this.downloadImage(imageUrl);
+          let image: Awaited<ReturnType<typeof this.downloadImage>>;
 
-          // timeout относится именно к запросу загрузки в VK.
+          try {
+            image = await this.downloadImage(imageUrl);
+          } catch (error) {
+            // Битая/недоступная картинка не должна ломать весь пост.
+            this.imageErrors.push({
+              url: imageUrl,
+              message: error instanceof Error
+                ? error.message
+                : String(error)
+            });
+            continue;
+          }
+
+          // Ошибка загрузки уже в VK остаётся фатальной для текущей попытки:
+          // внешний retry должен повторить upload, а не молча терять картинку.
           const attachment =
             await this.vk.upload.messagePhoto({
               peer_id: peerId,
@@ -156,9 +182,22 @@ export class VKSender {
         });
 
         if (!response.ok) {
-          throw new Error(
+          const error = new Error(
             `Image request failed: HTTP ${response.status} ${response.statusText}`
           );
+
+          // 4xx обычно постоянные ошибки URL — повторять такой запрос нет смысла.
+          if (
+            response.status >= 400 &&
+            response.status < 500 &&
+            response.status !== 408 &&
+            response.status !== 429
+          ) {
+            throw error;
+          }
+
+          lastError = error;
+          throw error;
         }
 
         const contentType =
@@ -195,6 +234,11 @@ export class VKSender {
                 `Image download timeout after ${this.imageDownloadTimeoutMs} ms: ${url}`
               )
             : error;
+
+        // Постоянную 4xx ошибку не повторяем.
+        if (this.isPermanentHttpError(lastError)) {
+          break;
+        }
       } finally {
         clearTimeout(timeout);
       }
@@ -205,6 +249,12 @@ export class VKSender {
     }
 
     throw lastError;
+  }
+
+  private isPermanentHttpError(error: unknown): boolean {
+    return error instanceof Error &&
+      /^Image request failed: HTTP 4\d{2} /.test(error.message) &&
+      !/^Image request failed: HTTP (408|429) /.test(error.message);
   }
 
   private getFilename(

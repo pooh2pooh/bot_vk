@@ -36,7 +36,7 @@ export const config = {
 
   targetChat: numberEnv(
     'TARGET_CHAT',
-    2000000002
+    2000000001
   ),
   adminChat: numberEnv(
     'ADMIN_CHAT',
