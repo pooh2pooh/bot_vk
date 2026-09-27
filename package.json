@@ -1,7 +1,7 @@
 {
   "name": "vk-feed-bot",
-  "version": "1.2",
-  "description": "VK bot for forwarding new Manjaro RU Atom feed entries, and screenshots from LOR",
+  "version": "2.0.0",
+  "description": "Pluggable VK feed bot: forwards new RSS/Atom entries from any number of configurable sources",
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",

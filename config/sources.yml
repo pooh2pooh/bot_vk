@@ -1,0 +1,42 @@
+# Список источников бота.
+#
+# Добавить источник  — добавить блок в этот список.
+# Удалить источник    — удалить блок (или поставить enabled: false).
+# Настроить источник  — поменять поля блока. Перезапуск бота не нужен
+#                        для url/интервалов после команды /source reload
+#                        (перечитывает файл при следующем цикле планировщика).
+#
+# Поля:
+#   id               уникальный идентификатор (a-z0-9-_), используется в БД и командах
+#   name             человекочитаемое имя для логов (опционально, по умолчанию = id)
+#   type             тип адаптера; сейчас поддерживается только "rss"
+#   enabled          включён ли источник
+#   url              URL RSS/Atom фида
+#   requireImages    true — посты без картинок пропускаются (напр. "скриншотные" источники)
+#   imageExtractor   "none" | "lor" | ваш собственный ключ (см. src/registries.ts)
+#   enrich           "none" | "openrouter" | ваш собственный ключ
+#   template         путь к YAML-шаблону сообщения
+#   pollIntervalMs   интервал опроса (опционально, иначе DEFAULT_POLL_INTERVAL_MS из .env)
+#   requestTimeoutMs таймаут запроса фида (опционально, иначе DEFAULT_REQUEST_TIMEOUT_MS)
+#   promptPath       свой промпт для enrich: openrouter (опционально, иначе глобальный)
+
+sources:
+  - id: forum
+    name: Manjaro RU Atom
+    type: rss
+    enabled: true
+    url: https://manjaro.ru/atom
+    requireImages: false
+    imageExtractor: none
+    enrich: none
+    template: templates/forum_post.yml
+
+  - id: screenshots
+    name: LOR Screenshots
+    type: rss
+    enabled: true
+    url: https://www.linux.org.ru/section-rss.jsp?section=3&group=19393
+    requireImages: true
+    imageExtractor: lor
+    enrich: openrouter
+    template: templates/screenshot_post.yml

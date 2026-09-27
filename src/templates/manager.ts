@@ -1,78 +1,59 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import YAML from 'yaml';
 
-import type {
-  ContentType,
-  FeedEntry,
-  TemplateData
-} from '../types.js';
+import type { FeedEntry, TemplateData } from '../core/types.js';
 
 interface TemplateFile {
-  type: ContentType;
   template: string;
 }
 
-export class TemplateManager {
-  private readonly templates = new Map<
-    ContentType,
-    string
-  >();
+interface LoadedTemplate {
+  path: string;
+  template: string;
+}
 
-  constructor(
-    private readonly templatesPath: string
-  ) {}
+/**
+ * Хранит по одному шаблону на каждый источник (ключ — sourceId).
+ * Пути к файлам регистрируются заранее (register), поэтому /template reload
+ * умеет перечитать их все, не зная заранее, сколько источников настроено.
+ */
+export class TemplateManager {
+  private readonly templates = new Map<string, LoadedTemplate>();
+
+  /** Регистрирует источник и путь к его шаблону, не загружая файл. */
+  register(sourceId: string, path: string): void {
+    this.templates.set(sourceId, { path, template: '' });
+  }
 
   async load(): Promise<void> {
-    this.templates.clear();
-    await this.loadTemplate('forum_post');
-    await this.loadTemplate('screenshot_post');
+    await Promise.all(
+      [...this.templates.keys()].map(sourceId => this.loadOne(sourceId))
+    );
   }
 
-  private async loadTemplate(
-    type: ContentType
-  ): Promise<void> {
-    const path = join(
-      this.templatesPath,
-      `${type}.yml`
-    );
+  async loadOne(sourceId: string): Promise<void> {
+    const entry = this.templates.get(sourceId);
 
-    const source = await readFile(
-      path,
-      'utf8'
-    );
-
-    const data = YAML.parse(
-      source
-    ) as TemplateFile;
-
-    if (
-      !data.template ||
-      typeof data.template !== 'string'
-    ) {
-      throw new Error(
-        `Invalid template: ${path}`
-      );
+    if (!entry) {
+      throw new Error(`Template not registered for source: ${sourceId}`);
     }
 
-    this.templates.set(
-      type,
-      data.template
-    );
+    const source = await readFile(entry.path, 'utf8');
+    const data = YAML.parse(source) as TemplateFile;
+
+    if (!data.template || typeof data.template !== 'string') {
+      throw new Error(`Invalid template: ${entry.path}`);
+    }
+
+    this.templates.set(sourceId, { path: entry.path, template: data.template });
   }
 
-  render(
-    type: ContentType,
-    entry: FeedEntry
-  ): string {
-    const template =
-      this.templates.get(type);
+  render(sourceId: string, entry: FeedEntry): string {
+    const loaded = this.templates.get(sourceId);
 
-    if (!template) {
-      throw new Error(
-        `Template not found: ${type}`
-      );
+    if (!loaded?.template) {
+      throw new Error(`Template not loaded for source: ${sourceId}`);
     }
 
     const data: TemplateData = {
@@ -84,12 +65,10 @@ export class TemplateManager {
       updated: entry.updated
     };
 
-    return template.replace(
+    return loaded.template.replace(
       /\{([a-zA-Z0-9_]+)\}/g,
       (_, key: keyof TemplateData) => {
-        return data[key] !== undefined
-          ? String(data[key])
-          : `{${key}}`;
+        return data[key] !== undefined ? String(data[key]) : `{${key}}`;
       }
     );
   }

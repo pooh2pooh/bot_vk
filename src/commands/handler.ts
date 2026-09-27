@@ -1,23 +1,28 @@
 import type { Context } from 'vk-io';
 
+import type { OpenRouterEnricher } from '../enrich/openrouter-enricher.js';
 import type { BotDatabase } from '../db/database.js';
-import type { FeedProcessor } from '../feed/processor.js';
-import type { TemplateManager } from '../templates/manager.js';
 import type { Logger } from '../logger/logger.js';
-import type { OpenRouterCommentService } from '../ai/openrouter.js';
+import type { Scheduler } from '../pipeline/scheduler.js';
+import type { SourcePipeline } from '../pipeline/source-pipeline.js';
+import type { TemplateManager } from '../templates/manager.js';
+
+export interface CommandHandlerOptions {
+  db: BotDatabase;
+  pipelines: Map<string, SourcePipeline>;
+  scheduler: Scheduler;
+  templates: TemplateManager;
+  logger: Logger;
+  adminChat: number;
+  ownerId: number;
+  openRouterEnricher: OpenRouterEnricher | null;
+}
 
 export class CommandHandler {
-  constructor(
-    private readonly db: BotDatabase,
-    private readonly processor: FeedProcessor,
-    private readonly templates: TemplateManager,
-    private readonly logger: Logger,
-    private readonly adminChat: number,
-    private readonly ai: OpenRouterCommentService
-  ) {}
+  constructor(private readonly opts: CommandHandlerOptions) {}
 
   async handle(ctx: Context): Promise<void> {
-    if (ctx.peerId !== this.adminChat) {
+    if (ctx.peerId !== this.opts.adminChat) {
       return;
     }
 
@@ -28,7 +33,8 @@ export class CommandHandler {
     }
 
     const senderId = ctx.senderId;
-    if (!this.db.isAdmin(senderId)) {
+
+    if (!this.opts.db.isAdmin(senderId)) {
       await ctx.send('⛔ У вас нет прав администратора.');
       return;
     }
@@ -40,45 +46,32 @@ export class CommandHandler {
         case '/help':
           await this.help(ctx);
           break;
-
         case '/status':
           await this.status(ctx);
           break;
-
-        case '/feed':
-          await this.feed(ctx, args);
+        case '/source':
+          await this.source(ctx, args);
           break;
-
         case '/admin':
           await this.admin(ctx, args);
           break;
-
         case '/template':
           await this.template(ctx, args);
           break;
-
         case '/ai':
           await this.aiCommand(ctx, args);
           break;
-
         default:
-          await ctx.send(
-            'Неизвестная команда.\n\nИспользуй /help'
-          );
+          await ctx.send('Неизвестная команда.\n\nИспользуй /help');
       }
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : String(error);
+      const message = error instanceof Error ? error.message : String(error);
 
-      this.logger.error(
+      this.opts.logger.error(
         `Command ${command} failed for ${senderId}: ${message}`
       );
 
-      await ctx.send(
-        `❌ Ошибка выполнения команды:\n${message}`
-      );
+      await ctx.send(`❌ Ошибка выполнения команды:\n${message}`);
     }
   }
 
@@ -88,14 +81,18 @@ export class CommandHandler {
         '🤖 Команды бота',
         '',
         '/status — состояние бота',
-        '/feed check — проверить Atom сейчас',
-        '/feed resend-last — повторно отправить последний пост',
+        '',
+        '/source list — список источников и их статус',
+        '/source check ID — проверить источник сейчас',
+        '/source resend-last ID — повторно отправить последний пост источника',
+        '/source enable ID — включить источник',
+        '/source disable ID — выключить источник',
         '',
         '/admin list — список администраторов',
         '/admin add ID — добавить администратора',
         '/admin remove ID — удалить администратора',
         '',
-        '/template reload — перечитать шаблоны',
+        '/template reload [ID] — перечитать шаблоны (все или один источник)',
         '',
         '/ai status — текущая AI-модель',
         '/ai reload — перечитать AI-промпт'
@@ -104,7 +101,16 @@ export class CommandHandler {
   }
 
   private async status(ctx: Context): Promise<void> {
-    const stats = this.db.getStats();
+    const stats = this.opts.db.getStats();
+    const perSource = this.opts.db.getEntriesPerSource();
+
+    const sourceLines = this.opts.scheduler
+      .list()
+      .map(
+        source =>
+          `${source.enabled ? '🟢' : '⚪'} ${source.sourceName} (${source.sourceId}): ` +
+          `${perSource[source.sourceId] ?? 0} записей`
+      );
 
     await ctx.send(
       [
@@ -112,22 +118,50 @@ export class CommandHandler {
         '',
         `Записей в БД: ${stats.totalEntries}`,
         `Отправлено: ${stats.sentEntries}`,
-        `Администраторов: ${stats.admins}`
+        `Администраторов: ${stats.admins}`,
+        '',
+        '📡 Источники',
+        ...sourceLines
       ].join('\n')
     );
   }
 
-  private async feed(
-    ctx: Context,
-    args: string[]
-  ): Promise<void> {
-    const action = args[0];
+  private getPipeline(id: string | undefined): SourcePipeline {
+    if (!id) {
+      throw new Error('Укажи id источника. Список: /source list');
+    }
+
+    const pipeline = this.opts.pipelines.get(id);
+
+    if (!pipeline) {
+      throw new Error(
+        `Источник "${id}" не найден. Список: /source list`
+      );
+    }
+
+    return pipeline;
+  }
+
+  private async source(ctx: Context, args: string[]): Promise<void> {
+    const [action, id] = args;
 
     switch (action) {
-      case 'check': {
-        await ctx.send('🔄 Проверяю Atom...');
+      case 'list': {
+        const lines = this.opts.scheduler
+          .list()
+          .map(
+            source =>
+              `${source.enabled ? '🟢' : '⚪'} ${source.sourceId} — ${source.sourceName}`
+          );
 
-        const count = await this.processor.check();
+        await ctx.send(['📡 Источники', '', ...lines].join('\n'));
+        return;
+      }
+
+      case 'check': {
+        const pipeline = this.getPipeline(id);
+        await ctx.send(`🔄 Проверяю "${id}"...`);
+        const count = await pipeline.check();
 
         await ctx.send(
           count > 0
@@ -138,190 +172,161 @@ export class CommandHandler {
       }
 
       case 'resend-last': {
-        await ctx.send(
-          '🔄 Получаю последний пост из Atom...'
-        );
+        const pipeline = this.getPipeline(id);
+        await ctx.send(`🔄 Получаю последний пост "${id}"...`);
+        const entry = await pipeline.resendLatest();
 
-        const entry =
-          await this.processor.resendLatest();
+        await ctx.send(`✅ Последний пост повторно отправлен:\n${entry.title}`);
+        return;
+      }
 
-        await ctx.send(
-          `✅ Последний пост повторно отправлен:\n${entry.title}`
-        );
+      case 'enable': {
+        this.getPipeline(id);
+        this.opts.scheduler.setEnabled(id, true);
+        this.opts.db.setSourceEnabledOverride(id, true);
+        await ctx.send(`✅ Источник "${id}" включён.`);
+        this.opts.logger.info(`Source ${id} enabled by ${ctx.senderId}.`);
+        return;
+      }
+
+      case 'disable': {
+        this.getPipeline(id);
+        this.opts.scheduler.setEnabled(id, false);
+        this.opts.db.setSourceEnabledOverride(id, false);
+        await ctx.send(`✅ Источник "${id}" выключен.`);
+        this.opts.logger.info(`Source ${id} disabled by ${ctx.senderId}.`);
         return;
       }
 
       default:
         await ctx.send(
           'Использование:\n' +
-          '/feed check\n' +
-          '/feed resend-last'
+            '/source list\n' +
+            '/source check ID\n' +
+            '/source resend-last ID\n' +
+            '/source enable ID\n' +
+            '/source disable ID'
         );
     }
   }
 
-  private async aiCommand(
-    ctx: Context,
-    args: string[]
-  ): Promise<void> {
+  private async aiCommand(ctx: Context, args: string[]): Promise<void> {
+    if (!this.opts.openRouterEnricher) {
+      await ctx.send('AI (OpenRouter) не настроен: нет OPENROUTER_API_KEY.');
+      return;
+    }
+
     switch (args[0]) {
       case 'status':
         await ctx.send(
           [
             '🤖 AI',
             '',
-            `Модель: ${this.ai.getModelName()}`,
-            `ID: ${this.ai.getModel()}`,
-            `Промпт: ${this.ai.getPromptPath()}`
+            `Модель: ${this.opts.openRouterEnricher.getModelName()}`,
+            `ID: ${this.opts.openRouterEnricher.getModel()}`,
+            `Промпт: ${this.opts.openRouterEnricher.getPromptPath()}`
           ].join('\n')
         );
         return;
 
       case 'reload':
-        await this.ai.loadPrompt();
-        await ctx.send(
-          '✅ AI-промпт перечитан.'
-        );
-        this.logger.info(
-          `AI prompt reloaded by ${ctx.senderId}.`
-        );
+        await this.opts.openRouterEnricher.loadPrompt();
+        await ctx.send('✅ AI-промпт перечитан.');
+        this.opts.logger.info(`AI prompt reloaded by ${ctx.senderId}.`);
         return;
 
       default:
-        await ctx.send(
-          'Использование:\n' +
-          '/ai status\n' +
-          '/ai reload'
-        );
+        await ctx.send('Использование:\n/ai status\n/ai reload');
     }
   }
 
-  private async admin(
-    ctx: Context,
-    args: string[]
-  ): Promise<void> {
+  private async admin(ctx: Context, args: string[]): Promise<void> {
     const action = args[0];
 
     switch (action) {
       case 'list': {
-        const admins = this.db.getAdmins();
+        const admins = this.opts.db.getAdmins();
         const lines = admins.map(
           admin =>
-            `${admin.role === 'owner' ? '👑' : '👤'} ` +
-            `${admin.userId} — ${admin.role}`
+            `${admin.role === 'owner' ? '👑' : '👤'} ${admin.userId} — ${admin.role}`
         );
 
-        await ctx.send(
-          [
-            '👥 Администраторы',
-            '',
-            ...lines
-          ].join('\n')
-        );
+        await ctx.send(['👥 Администраторы', '', ...lines].join('\n'));
         return;
       }
 
       case 'add': {
-        if (!this.db.isOwner(ctx.senderId)) {
-          await ctx.send(
-            '⛔ Добавлять администраторов может только владелец.'
-          );
+        if (!this.opts.db.isOwner(ctx.senderId)) {
+          await ctx.send('⛔ Добавлять администраторов может только владелец.');
           return;
         }
 
         const id = Number(args[1]);
 
         if (!Number.isInteger(id) || id <= 0) {
-          await ctx.send(
-            'Использование: /admin add ID'
-          );
+          await ctx.send('Использование: /admin add ID');
           return;
         }
 
-        this.db.addAdmin(id, 'admin');
-
-        await ctx.send(
-          `✅ Пользователь ${id} добавлен в администраторы.`
-        );
-
-        this.logger.info(
-          `Admin ${ctx.senderId} added administrator ${id}.`
-        );
+        this.opts.db.addAdmin(id, 'admin');
+        await ctx.send(`✅ Пользователь ${id} добавлен в администраторы.`);
+        this.opts.logger.info(`Admin ${ctx.senderId} added administrator ${id}.`);
         return;
       }
 
       case 'remove': {
-        if (!this.db.isOwner(ctx.senderId)) {
-          await ctx.send(
-            '⛔ Удалять администраторов может только владелец.'
-          );
+        if (!this.opts.db.isOwner(ctx.senderId)) {
+          await ctx.send('⛔ Удалять администраторов может только владелец.');
           return;
         }
 
         const id = Number(args[1]);
 
         if (!Number.isInteger(id) || id <= 0) {
-          await ctx.send(
-            'Использование: /admin remove ID'
-          );
+          await ctx.send('Использование: /admin remove ID');
           return;
         }
 
         if (id === ctx.senderId) {
-          await ctx.send(
-            '⛔ Нельзя удалить самого себя.'
-          );
+          await ctx.send('⛔ Нельзя удалить самого себя.');
           return;
         }
 
-        if (id === Number(process.env.OWNER_ID)) {
-          await ctx.send(
-            '⛔ Нельзя удалить владельца.'
-          );
+        if (id === this.opts.ownerId) {
+          await ctx.send('⛔ Нельзя удалить владельца.');
           return;
         }
 
-        this.db.removeAdmin(id);
-
-        await ctx.send(
-          `✅ Пользователь ${id} удалён из администраторов.`
-        );
-
-        this.logger.info(
-          `Admin ${ctx.senderId} removed administrator ${id}.`
-        );
+        this.opts.db.removeAdmin(id);
+        await ctx.send(`✅ Пользователь ${id} удалён из администраторов.`);
+        this.opts.logger.info(`Admin ${ctx.senderId} removed administrator ${id}.`);
         return;
       }
 
       default:
         await ctx.send(
-          'Использование:\n' +
-          '/admin list\n' +
-          '/admin add ID\n' +
-          '/admin remove ID'
+          'Использование:\n/admin list\n/admin add ID\n/admin remove ID'
         );
     }
   }
 
-  private async template(
-    ctx: Context,
-    args: string[]
-  ): Promise<void> {
+  private async template(ctx: Context, args: string[]): Promise<void> {
     if (args[0] !== 'reload') {
-      await ctx.send(
-        'Использование:\n/template reload'
-      );
+      await ctx.send('Использование:\n/template reload [ID]');
       return;
     }
 
-    await this.templates.load();
+    const id = args[1];
 
-    await ctx.send(
-      '✅ Шаблоны успешно перечитаны.'
-    );
+    if (id) {
+      this.getPipeline(id);
+      await this.opts.templates.loadOne(id);
+      await ctx.send(`✅ Шаблон "${id}" перечитан.`);
+    } else {
+      await this.opts.templates.load();
+      await ctx.send('✅ Все шаблоны перечитаны.');
+    }
 
-    this.logger.info(
-      `Templates reloaded by ${ctx.senderId}.`
-    );
+    this.opts.logger.info(`Templates reloaded by ${ctx.senderId}.`);
   }
 }

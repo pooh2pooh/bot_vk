@@ -1,19 +1,84 @@
 # 🤖 VK Feed Bot
 
-Бот для автоматической пересылки новых RSS/Atom-постов в VK с SQLite-дедупликацией, шаблонами сообщений и AI-комментариями для постов со скриншотами.
+Бот для автоматической пересылки новых RSS/Atom-постов в VK. Поддерживает
+произвольное число источников, SQLite-дедупликацию, шаблоны сообщений и
+подключаемое AI-обогащение постов (например, комментарии вместо исходного
+текста для постов со скриншотами).
+
+## Архитектура: источники — это конфиг, а не код
+
+Раньше добавление источника означало правку нескольких файлов и `.env`.
+Теперь источник — это блок в `config/sources.yml`:
+
+```yaml
+sources:
+  - id: forum
+    name: Manjaro RU Atom
+    type: rss
+    url: https://manjaro.ru/atom
+    template: templates/forum_post.yml
+
+  - id: screenshots
+    name: LOR Screenshots
+    type: rss
+    url: https://www.linux.org.ru/section-rss.jsp?section=3
+    requireImages: true
+    imageExtractor: lor
+    enrich: openrouter
+    template: templates/screenshot_post.yml
+```
+
+**Добавить источник** → добавить блок.
+**Удалить источник** → удалить блок (или `enabled: false`).
+**Настроить источник** → поменять поля (`url`, `pollIntervalMs`, `template`,
+`enrich`, `promptPath` и т.д.).
+
+Ничего из этого не требует пересборки кода — только перезапуск бота (или
+`/source check ID`, если нужно проверить прямо сейчас).
+
+Полное описание всех полей — в комментариях внутри `config/sources.yml`.
+
+### Когда всё-таки нужен код
+
+Если новый источник — это принципиально новый *тип* (не RSS/Atom, например
+Telegram-канал), или сайт верстает картинки по-своему и нужен новый
+`imageExtractor`, или нужен новый способ обогащения (`enrich`) — во всех
+случаях это **один новый класс + одна строка регистрации** в
+`src/registries.ts`, без изменений в остальном коде:
+
+```ts
+// src/registries.ts
+imageExtractors.register('my-site', new MySiteImageExtractor());
+sourceAdapters.register('telegram', cfg => new TelegramSourceAdapter(cfg));
+enrichers.register('summarizer', new SummarizerEnricher(...));
+```
+
+Интерфейсы, которые нужно реализовать:
+
+| Точка расширения | Интерфейс | Где живёт |
+| --- | --- | --- |
+| Новый тип источника | `SourceAdapter` (`fetch(): Promise<FeedEntry[]>`) | `src/core/source-adapter.ts` |
+| Новый способ достать картинки | `ImageExtractor` (`extract(item): string[]`) | `src/core/image-extractor.ts` |
+| Новый способ обогащения контента | `Enricher` (`enrich(entry): Promise<EnrichResult>`) | `src/core/enricher.ts` |
+
+Остальной конвейер (дедупликация в SQLite, рендер шаблона, отправка в VK,
+backoff, админ-команды) ничего не знает про конкретные сайты/модели и не
+меняется.
 
 ## Возможности
 
-- RSS/Atom → VK без дублей.
-- Первый запуск **не пересылает старые записи**.
-- Скриншоты отправляются с комментарием OpenRouter вместо исходного текста.
-- Автором AI-комментария указывается название модели.
-- Модель, API key и промпт меняются через `.env`/файл шаблона.
-- Логи отправляются в отдельный админ-чат, включая время генерации AI.
-- SQLite хранит обработанные посты и администраторов.
-- Ошибки AI не блокируют отправку самого скриншота: используется исходный текст.
-- Изображения скачиваются ботом с retry и отдельными timeout перед загрузкой в VK.
+- Любое число RSS/Atom источников, каждый со своим интервалом опроса,
+  таймаутом, шаблоном и (опционально) AI-обогащением.
+- Дедупликация в SQLite. Первый запуск **не пересылает старые записи**.
+- Отказ одного источника не влияет на остальные: у каждого свой backoff
+  (нарастающая задержка при повторяющейся одинаковой ошибке) и свой цикл опроса.
+- AI-обогащение (OpenRouter) — опционально, на источник. Ошибка AI не
+  блокирует отправку поста: используется исходный текст.
+- Изображения скачиваются ботом с retry и отдельными timeout перед загрузкой
+  в VK — это защищает от `The operation was aborted`.
 - Более 10 изображений автоматически разбиваются на несколько сообщений.
+- Логи отправляются в отдельный админ-чат.
+- Источники можно включать/выключать на лету командой, без перезапуска.
 
 ## 1. Установка
 
@@ -21,15 +86,16 @@
 
 ### Arch Linux
 
-```bash
+```
 sudo pacman -S --needed nodejs npm base-devel
 ```
 
-`base-devel` нужен для сборки нативных зависимостей, включая `better-sqlite3`, если для текущей версии Node нет готового бинарника.
+`base-devel` нужен для сборки нативных зависимостей, включая `better-sqlite3`,
+если для текущей версии Node нет готового бинарника.
 
 ### Клонирование
 
-```bash
+```
 git clone https://github.com/pooh2pooh/bot_vk.git
 cd bot_vk
 npm install
@@ -37,31 +103,28 @@ npm install
 
 При проблемах с `better-sqlite3`:
 
-```bash
+```
 npm rebuild better-sqlite3 --build-from-source
 ```
 
-## 2. Настройка `.env`
+## 2. Настройка
 
-```bash
+### 2.1 `.env` — секреты и глобальные дефолты
+
+```
 cp .env.example .env
 nano .env
 ```
 
-Минимальная конфигурация:
-
-```env
+```
 VK_TOKEN=YOUR_VK_TOKEN
 
 TARGET_CHAT=2000000001
 ADMIN_CHAT=2000000003
 OWNER_ID=281457599
 
-FEED_URL=https://manjaro.ru/atom
-SCREENSHOTS_FEED_URL=https://www.linux.org.ru/section-rss.jsp?section=3&group=19393
-
-POLL_INTERVAL_MS=60000
-REQUEST_TIMEOUT_MS=30000
+DEFAULT_POLL_INTERVAL_MS=60000
+DEFAULT_REQUEST_TIMEOUT_MS=30000
 LOG_LEVEL=info
 
 OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY
@@ -75,71 +138,61 @@ IMAGE_DOWNLOAD_TIMEOUT_MS=60000
 VK_UPLOAD_TIMEOUT_MS=90000
 ```
 
-### Основные параметры
-
 | Переменная | Назначение |
-|---|---|
+| --- | --- |
 | `VK_TOKEN` | токен VK для работы бота |
 | `TARGET_CHAT` | чат для публикации постов |
 | `ADMIN_CHAT` | админ-чат, куда приходят логи и команды |
 | `OWNER_ID` | VK ID владельца |
-| `FEED_URL` | основной RSS/Atom-фид |
-| `SCREENSHOTS_FEED_URL` | фид постов со скриншотами |
-| `POLL_INTERVAL_MS` | интервал проверки фидов |
-| `OPENROUTER_API_KEY` | ключ OpenRouter |
-| `OPENROUTER_MODEL` | ID модели OpenRouter |
-| `OPENROUTER_MODEL_NAME` | имя модели в сообщении VK |
-| `OPENROUTER_PROMPT_FILE` | путь к AI-промпту |
-| `OPENROUTER_TIMEOUT_MS` | timeout генерации AI |
-| `OPENROUTER_MAX_TOKENS` | максимальный размер ответа AI |
-| `IMAGE_DOWNLOAD_TIMEOUT_MS` | timeout скачивания изображения |
-| `VK_UPLOAD_TIMEOUT_MS` | timeout загрузки изображения в VK |
+| `DEFAULT_POLL_INTERVAL_MS` | интервал опроса, если источник не задал свой |
+| `DEFAULT_REQUEST_TIMEOUT_MS` | таймаут запроса фида, если источник не задал свой |
+| `OPENROUTER_API_KEY` | ключ OpenRouter (нужен, если хотя бы один источник использует `enrich: openrouter`) |
+| `OPENROUTER_MODEL` / `OPENROUTER_MODEL_NAME` | модель по умолчанию и её имя для сообщений |
+| `OPENROUTER_PROMPT_FILE` | промпт по умолчанию (источник может задать свой `promptPath`) |
+| `IMAGE_DOWNLOAD_TIMEOUT_MS` | таймаут скачивания изображения ботом |
+| `VK_UPLOAD_TIMEOUT_MS` | таймаут загрузки изображения в VK |
+| `DATABASE_PATH` | путь к SQLite (по умолчанию `data/bot.db`) |
+| `SOURCES_FILE` | путь к списку источников (по умолчанию `config/sources.yml`) |
 
 > `.env` содержит секреты и не должен попадать в Git.
 
+### 2.2 `config/sources.yml` — источники
+
+Несекретная конфигурация, версионируется в Git. См. пример выше и
+комментарии в самом файле.
+
 ## 3. Настройка AI
 
-Модель меняется одной строкой:
+Модель по умолчанию меняется в `.env` одной строкой:
 
-```env
+```
 OPENROUTER_MODEL=новый-id-модели
 OPENROUTER_MODEL_NAME=Название модели
 ```
 
-Промпт лежит в:
+Промпт по умолчанию лежит в `templates/ai_comment.txt`. Источник может
+задать свой промпт через `promptPath` в `config/sources.yml` — тогда для
+него создаётся отдельный экземпляр AI-обогатителя с этим промптом.
 
-```text
-templates/ai_comment.txt
-```
-
-После изменения промпта перезапуск не нужен:
-
-```text
-/ai reload
-```
-
-Проверка текущей конфигурации:
-
-```text
-/ai status
-```
+После изменения промпта перезапуск не нужен: `/ai reload`.
+Проверка текущей конфигурации: `/ai status`.
 
 ## 4. Сборка и запуск
 
-```bash
+```
 npm run build
 npm start
 ```
 
 Для разработки без сборки:
 
-```bash
+```
 npm run dev
 ```
 
 Для постоянной работы удобно использовать PM2:
 
-```bash
+```
 npm install -g pm2
 pm2 start dist/index.js --name vk-feed-bot
 pm2 save
@@ -148,114 +201,149 @@ pm2 startup
 
 ## 5. Команды в админ-чате
 
-```text
+```
 /help
 /status
 
-/feed check
-/feed resend-last
+/source list
+/source check ID
+/source resend-last ID
+/source enable ID
+/source disable ID
 
 /admin list
 /admin add ID
 /admin remove ID
 
-/template reload
+/template reload [ID]
 
 /ai status
 /ai reload
 ```
 
-Команды принимаются **только в `ADMIN_CHAT`** и только от пользователей, записанных в SQLite как администраторы.
-
-`OWNER_ID` автоматически получает роль владельца при старте.
+Команды принимаются **только в `ADMIN_CHAT`** и только от пользователей,
+записанных в SQLite как администраторы. `OWNER_ID` автоматически получает
+роль владельца при старте. `/source enable|disable` сохраняется в SQLite и
+переживает перезапуск.
 
 ## 6. Как работает обработка
 
-```text
-RSS/Atom
-   │
-   ▼
-FeedReader / ScreenshotFeedReader
-   │
-   ▼
-FeedProcessor ───► SQLite (data/bot.db)
-   │
-   ├── обычный пост ───────────────► TemplateManager ─► VKSender
-   │
-   └── скриншотный пост
-          │
-          ▼
-     OpenRouterCommentService
-          │
-          ▼
-     AI-комментарий + время генерации
-          │
-          ▼
-     TemplateManager ─────────────► VKSender ─► VK
 ```
+config/sources.yml
+        │
+        ▼
+SourceAdapterRegistry ──► RssSourceAdapter (+ ImageExtractor-стратегия)
+        │
+        ▼
+   SourcePipeline ───► SQLite (data/bot.db) — дедупликация
+        │
+        ├── enrich: none ──────────────────────► TemplateManager ─► VKSender ─► VK
+        │
+        └── enrich: openrouter (или свой)
+               │
+               ▼
+        Enricher.enrich() — ошибка не блокирует пост, fallback на исходный текст
+               │
+               ▼
+        TemplateManager ──────────────────────► VKSender ─► VK
+```
+
+Каждый источник крутится в `Scheduler` на своём `setTimeout`-цикле с
+собственным backoff. Падение одного источника (сеть, парсинг, VK) не
+затрагивает остальные.
 
 ### Первый запуск
 
-При старте текущие записи фидов добавляются в SQLite и помечаются `ignored`. Старые посты не отправляются. После этого бот отслеживает только новые записи.
+При старте текущие записи всех источников добавляются в SQLite и
+помечаются `ignored`. Старые посты не отправляются. После этого бот
+отслеживает только новые записи — для каждого источника независимо.
 
 ### Дубликаты и ошибки
 
-`data/bot.db` хранит состояние каждого поста. Уже обработанные записи повторно не отправляются.
+`data/bot.db` хранит состояние каждого поста (глобальный id —
+`${sourceId}:${rawId}`). Уже обработанные записи повторно не отправляются.
 
-Если отправка поста не удалась, запись **не помечается отправленной**. На следующей проверке бот попробует её снова.
+Если отправка поста не удалась — запись **не помечается отправленной**. На
+следующей проверке этого источника бот попробует снова.
 
-Если OpenRouter недоступен или превышен timeout, скриншот всё равно отправляется с исходным текстом автора. Ошибка AI отдельно попадает в лог.
+Если обогащение (например, AI) недоступно или превышен timeout — пост всё
+равно отправляется с исходным текстом автора. Ошибка обогащения отдельно
+попадает в лог.
 
 ### Изображения
 
-Внешние URL изображений сначала скачиваются самим ботом с retry. Затем `Buffer` загружается в VK с отдельным timeout. Это защищает от ошибок вида:
+Внешние URL изображений сначала скачиваются самим ботом с retry. Затем
+`Buffer` загружается в VK с отдельным timeout. Это защищает от ошибок вида:
 
-```text
+```
 The operation was aborted
 ```
 
 ## 7. Структура проекта
 
-```text
+```
 src/
-├── ai/
-│   └── openrouter.ts       # OpenRouter и генерация комментариев
-├── commands/
-│   └── handler.ts          # команды администраторов
-├── db/
-│   └── database.ts         # SQLite
-├── feed/
-│   ├── reader.ts           # основной RSS/Atom
-│   ├── screenshot-reader.ts# посты со скриншотами
-│   └── processor.ts        # дедупликация и обработка
-├── logger/
-│   └── logger.ts           # логирование в VK
-├── templates/
-│   └── manager.ts          # загрузка YAML-шаблонов
-├── vk/
-│   ├── client.ts           # VK API
-│   └── sender.ts           # текст + изображения + retry
-├── config.ts               # конфигурация из .env
-└── index.ts                # точка входа
+├── core/                     # контракты (не знают о конкретных сайтах/моделях)
+│   ├── types.ts               # FeedEntry, TemplateData, Admin
+│   ├── source-adapter.ts      # интерфейс SourceAdapter
+│   ├── source-adapter-registry.ts
+│   ├── image-extractor.ts     # интерфейс ImageExtractor + реестр
+│   └── enricher.ts            # интерфейс Enricher + реестр
+│
+├── sources/
+│   ├── atom-item.ts            # разбор Atom/RSS полей
+│   ├── text-utils.ts           # нормализация HTML/текста, fetchText
+│   ├── rss-source-adapter.ts   # универсальный RSS/Atom SourceAdapter
+│   └── image-extractors/
+│       └── lor-image-extractor.ts   # специфика linux.org.ru
+│
+├── enrich/
+│   └── openrouter-enricher.ts  # AI-обогащение через OpenRouter
+│
+├── pipeline/
+│   ├── source-pipeline.ts      # fetch → dedupe → enrich → render → send
+│   └── scheduler.ts            # независимый poll-цикл + backoff на источник
+│
+├── config/
+│   ├── env.ts                  # секреты и глобальные дефолты из .env
+│   ├── source-config.ts        # тип одного источника
+│   ├── sources-loader.ts       # парсинг и валидация config/sources.yml
+│   ├── app-config.ts           # итоговый AppConfig
+│   └── index.ts                # склейка env + sources.yml
+│
+├── registries.ts               # точка регистрации всех стратегий
+│
+├── db/database.ts              # SQLite (дедупликация, админы, настройки)
+├── vk/client.ts                # VK API клиент
+├── vk/sender.ts                # текст + изображения + retry
+├── templates/manager.ts        # YAML-шаблоны сообщений, по одному на источник
+├── commands/handler.ts         # команды администраторов
+├── logger/logger.ts            # логирование в VK
+├── utils/error-backoff.ts      # нарастающая задержка при повторных ошибках
+└── index.ts                    # composition root
+
+config/
+└── sources.yml                 # список источников (несекретно, в Git)
 
 templates/
-├── ai_comment.txt          # промпт AI
-└── screenshot_post.yml     # шаблон скриншотного поста
+├── ai_comment.txt              # промпт AI по умолчанию
+├── forum_post.yml              # шаблон обычного поста
+└── screenshot_post.yml         # шаблон скриншотного поста
 
 data/
-└── bot.db                  # состояние бота и история фидов
+└── bot.db                      # состояние бота и история фидов
 ```
 
 ## 8. Типовой цикл работы
 
-```text
-Новый пост
+```
+Новый пост источника X
    ↓
-Проверка ID в SQLite
+Проверка id в SQLite (id = "X:<raw-id>")
    ↓
-[скриншот?]
-   ├─ нет → обычный шаблон
-   └─ да  → OpenRouter → AI-комментарий
+[источник настроен на enrich?]
+   ├─ нет → шаблон источника
+   └─ да  → Enricher.enrich() → обогащённая запись (или fallback при ошибке)
    ↓
 Отправка изображений + текста в VK
    ↓
@@ -264,24 +352,22 @@ data/
 Лог в ADMIN_CHAT
 ```
 
-Для AI в админ-чат пишется название поста и фактическое время генерации, например:
-
-```text
-🤖 [INFO]
-📸 Скриншот переслан
-Название: Домашний сетап...
-Модель: GLM 5.2
-Генерация: 3.47 с
-Режим: автоматическая отправка
-```
-
 ## 9. Обновление
 
-```bash
+```
 git pull
 npm install
 npm run build
 pm2 restart vk-feed-bot
 ```
 
-`data/bot.db` удалять при обновлении не нужно — там хранится состояние дедупликации и администраторы.
+`data/bot.db` удалять при обновлении не нужно — там хранится состояние
+дедупликации и администраторы.
+
+### Миграция со старой версии (одна пара `FEED_URL`/`SCREENSHOTS_FEED_URL`)
+
+Старые переменные `.env` `FEED_URL` и `SCREENSHOTS_FEED_URL` больше не
+используются. Их значения нужно перенести в `config/sources.yml` (пример уже
+содержит оба прежних источника с теми же URL). Старые записи в `data/bot.db`
+совместимы: колонка `source` как хранила строку, так и хранит — теперь это
+`id` источника из `sources.yml` (`forum`, `screenshots` в примере).

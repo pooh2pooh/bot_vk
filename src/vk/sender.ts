@@ -2,13 +2,12 @@ import { randomInt } from 'node:crypto';
 
 import type { VK } from 'vk-io';
 
+import type { ImageDownloadFailure } from '../core/types.js';
+
+export type { ImageDownloadFailure };
+
 const VK_MAX_ATTACHMENTS_PER_MESSAGE = 10;
 const IMAGE_DOWNLOAD_RETRIES = 3;
-
-export interface ImageDownloadFailure {
-  url: string;
-  message: string;
-}
 
 export class VKSender {
   private readonly imageErrors: ImageDownloadFailure[] = [];

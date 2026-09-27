@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 
-import { config } from './config.js';
+import { loadConfig } from './config/index.js';
 import { BotDatabase } from './db/database.js';
 
 import { createVK } from './vk/client.js';
@@ -8,30 +8,22 @@ import { VKSender } from './vk/sender.js';
 
 import { Logger } from './logger/logger.js';
 
-import { FeedReader } from './feed/reader.js';
-import { ScreenshotFeedReader } from './feed/screenshot-reader.js';
-import { FeedProcessor } from './feed/processor.js';
-
 import { TemplateManager } from './templates/manager.js';
 import { CommandHandler } from './commands/handler.js';
-import { OpenRouterCommentService } from './ai/openrouter.js';
-import { ErrorBackoff } from './utils/error-backoff.js';
+
+import { buildRegistries, resolveEnricherForSource } from './registries.js';
+import { SourcePipeline } from './pipeline/source-pipeline.js';
+import { Scheduler } from './pipeline/scheduler.js';
 
 async function main(): Promise<void> {
+  const config = await loadConfig();
+
   await mkdir('data', { recursive: true });
 
-  const db = new BotDatabase(
-    config.databasePath
-  );
+  const db = new BotDatabase(config.databasePath);
+  db.addAdmin(config.ownerId, 'owner');
 
-  db.addAdmin(
-    config.ownerId,
-    'owner'
-  );
-
-  const vk = createVK(
-    config.vkToken
-  );
+  const vk = createVK(config.vkToken);
 
   const sender = new VKSender(
     vk,
@@ -39,109 +31,91 @@ async function main(): Promise<void> {
     config.imageDownloadTimeoutMs,
     config.vkUploadTimeoutMs
   );
-  const logger = new Logger(
-    sender,
-    config.adminChat,
-    config.logLevel as
-      | 'debug'
-      | 'info'
-      | 'warn'
-      | 'error'
-  );
 
-  const templates =
-    new TemplateManager(
-      config.templatesPath
-    );
+  const logger = new Logger(sender, config.adminChat, config.logLevel);
+
+  const templates = new TemplateManager();
+  const registries = buildRegistries(config);
+
+  if (registries.openRouterEnricher) {
+    await registries.openRouterEnricher.loadPrompt();
+  }
+
+  // --- Собираем пайплайн для каждого источника из config/sources.yml. ---
+  // Добавление/удаление источника — это только правка YAML, этот цикл
+  // не меняется вне зависимости от того, сколько источников настроено.
+  const pipelines = new Map<string, SourcePipeline>();
+  const scheduler = new Scheduler(logger);
+
+  for (const sourceConfig of config.sources) {
+    templates.register(sourceConfig.id, sourceConfig.template);
+
+    const adapter = registries.sourceAdapters.create(sourceConfig);
+    const enricher = await resolveEnricherForSource(registries, config, sourceConfig);
+
+    const pipeline = new SourcePipeline({
+      sourceId: sourceConfig.id,
+      sourceName: sourceConfig.name,
+      adapter,
+      enricher,
+      db,
+      templates,
+      sender,
+      logger,
+      targetChat: config.targetChat
+    });
+
+    pipelines.set(sourceConfig.id, pipeline);
+
+    // Персистентный override из /source enable|disable переживает рестарт,
+    // но конфиг-файл остаётся единственным источником истины по умолчанию.
+    const persistedEnabled = db.getSourceEnabledOverride(sourceConfig.id);
+    const enabled = persistedEnabled ?? sourceConfig.enabled;
+
+    scheduler.add({
+      pipeline,
+      pollIntervalMs: sourceConfig.pollIntervalMs ?? config.defaultPollIntervalMs,
+      enabled
+    });
+  }
 
   await templates.load();
 
-  const ai = new OpenRouterCommentService(
-    config.openRouterApiKey,
-    config.openRouterModel,
-    config.openRouterModelName,
-    config.openRouterPromptPath,
-    config.openRouterTimeoutMs,
-    config.openRouterMaxTokens
-  );
-
-  await ai.loadPrompt();
-
-  const forumReader =
-    new FeedReader(
-      config.feedUrl,
-      config.requestTimeoutMs
-    );
-
-  const screenshotReader =
-    new ScreenshotFeedReader(
-      config.screenshotFeedUrl,
-      config.requestTimeoutMs
-    );
-
-  const forumProcessor =
-    new FeedProcessor(
-      forumReader,
-      db,
-      templates,
-      sender,
-      logger,
-      config.targetChat,
-      'forum'
-    );
-
-  const screenshotProcessor =
-    new FeedProcessor(
-      screenshotReader,
-      db,
-      templates,
-      sender,
-      logger,
-      config.targetChat,
-      'screenshots',
-      ai
-    );
-
-  const commands =
-    new CommandHandler(
-      db,
-      forumProcessor,
-      templates,
-      logger,
-      config.adminChat,
-      ai
-    );
+  const commands = new CommandHandler({
+    db,
+    pipelines,
+    scheduler,
+    templates,
+    logger,
+    adminChat: config.adminChat,
+    ownerId: config.ownerId,
+    openRouterEnricher: registries.openRouterEnricher
+  });
 
   try {
-    await forumProcessor.initialize();
-    await screenshotProcessor.initialize();
+    await Promise.all(
+      [...pipelines.values()].map(pipeline => pipeline.initialize())
+    );
   } catch (error) {
     await logger.error(
       `Initial feed load failed: ${
-        error instanceof Error
-          ? error.message
-          : String(error)
+        error instanceof Error ? error.message : String(error)
       }`
     );
     throw error;
   }
 
-  vk.updates.on(
-    'message_new',
-    async ctx => {
-      try {
-        await commands.handle(ctx);
-      } catch (error) {
-        await logger.error(
-          `Message handler failed: ${
-            error instanceof Error
-              ? error.message
-              : String(error)
-          }`
-        );
-      }
+  vk.updates.on('message_new', async ctx => {
+    try {
+      await commands.handle(ctx);
+    } catch (error) {
+      await logger.error(
+        `Message handler failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
-  );
+  });
 
   await vk.updates.start();
 
@@ -150,27 +124,24 @@ async function main(): Promise<void> {
       'Bot started.',
       `Target chat: ${config.targetChat}`,
       `Admin chat: ${config.adminChat}`,
-      `Forum feed: ${config.feedUrl}`,
-      `Screenshots feed: ${config.screenshotFeedUrl}`,
-      `AI model: ${config.openRouterModel}`,
-      `Poll interval: ${config.pollIntervalMs} ms`
+      `Sources: ${config.sources.map(s => `${s.id} (${s.url})`).join(', ')}`,
+      registries.openRouterEnricher
+        ? `AI model: ${registries.openRouterEnricher.getModel()}`
+        : 'AI: disabled'
     ].join('\n')
   );
 
   let stopped = false;
 
-  const shutdown = async (
-    signal: string
-  ): Promise<void> => {
+  const shutdown = async (signal: string): Promise<void> => {
     if (stopped) {
       return;
     }
 
     stopped = true;
+    scheduler.stop();
 
-    console.log(
-      `[SYSTEM] Received ${signal}, shutting down...`
-    );
+    console.log(`[SYSTEM] Received ${signal}, shutting down...`);
 
     try {
       await vk.updates.stop();
@@ -182,101 +153,13 @@ async function main(): Promise<void> {
     process.exit(0);
   };
 
-  process.once(
-    'SIGINT',
-    () => void shutdown('SIGINT')
-  );
+  process.once('SIGINT', () => void shutdown('SIGINT'));
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
 
-  process.once(
-    'SIGTERM',
-    () => void shutdown('SIGTERM')
-  );
-
-  const forumBackoff = new ErrorBackoff();
-  const screenshotBackoff = new ErrorBackoff();
-
-  const formatDelay = (ms: number): string => {
-    const minutes = Math.round(ms / 60_000);
-    return minutes >= 60
-      ? `${Math.round(minutes / 60)} ч.`
-      : `${minutes} мин.`;
-  };
-
-  const runFeedLoop = async (
-    name: string,
-    processor: FeedProcessor,
-    backoff: ErrorBackoff
-  ): Promise<void> => {
-    if (stopped) {
-      return;
-    }
-
-    try {
-      await processor.check();
-
-      const recovery = backoff.success();
-
-      if (recovery.hadFailures) {
-        await logger.info(
-          `✅ ${name} feed recovered after ${recovery.count} failed attempt(s).`
-        );
-      }
-    } catch (error) {
-      const failure = backoff.fail(error);
-      const message =
-        error instanceof Error
-          ? error.message
-          : String(error);
-
-      // Одинаковые последовательные ошибки не спамят лог и админ-чат.
-      if (failure.shouldLog) {
-        await logger.error(
-          `${name} feed check failed: ${message}\n` +
-          `Следующая попытка через ${formatDelay(failure.delayMs)}.`
-        );
-      } else {
-        console.warn(
-          `[BACKOFF] ${name}: same error #${failure.count}; ` +
-          `next attempt in ${formatDelay(failure.delayMs)}`
-        );
-      }
-
-      if (!stopped) {
-        setTimeout(
-          () => void runFeedLoop(name, processor, backoff),
-          failure.delayMs
-        );
-      }
-
-      return;
-    }
-
-    if (!stopped) {
-      setTimeout(
-        () => void runFeedLoop(name, processor, backoff),
-        config.pollIntervalMs
-      );
-    }
-  };
-
-  void runFeedLoop(
-    'Forum',
-    forumProcessor,
-    forumBackoff
-  );
-
-  void runFeedLoop(
-    'Screenshot',
-    screenshotProcessor,
-    screenshotBackoff
-  );
+  scheduler.start();
 }
 
 main().catch(error => {
-  console.error(
-    '[FATAL]',
-    error
-  );
-
+  console.error('[FATAL]', error);
   process.exit(1);
 });
