@@ -6,10 +6,20 @@ import { itemHtmlContent } from '../text-utils.js';
 
 const { decode } = he;
 
+interface ImageCandidate {
+  url: string;
+  width: number;
+  priority: number;
+  order: number;
+}
+
 function normalizeUrl(value: string, baseUrl: string): string | null {
   try {
     const url = new URL(
-      decode(value).replace(/&amp;/gi, '&').trim(),
+      decode(value)
+        .replace(/&amp;/gi, '&')
+        .replace(/^['"]|['"]$/g, '')
+        .trim(),
       baseUrl
     );
 
@@ -18,14 +28,12 @@ function normalizeUrl(value: string, baseUrl: string): string | null {
     }
 
     const hostname = url.hostname.toLowerCase();
-
     if (hostname !== 'linux.org.ru' && hostname !== 'www.linux.org.ru') {
       return null;
     }
 
     const pathname = decodeURIComponent(url.pathname);
-
-    if (!pathname.startsWith('/images/')) {
+    if (!/^\/(?:images|photos)\//i.test(pathname)) {
       return null;
     }
 
@@ -39,23 +47,68 @@ function normalizeUrl(value: string, baseUrl: string): string | null {
   }
 }
 
-/*
- * Превращаем любой thumbnail-вариант одной LOR-картинки в её canonical URL:
- *   500px.jpg / 1000px.jpg / 1500px.jpg / 2000px.jpg  ->  original.jpg
- * Благодаря этому одна картинка не попадёт во VK четыре раза.
+function getCandidateInfo(url: string, order: number): ImageCandidate {
+  const pathname = new URL(url).pathname;
+  const filename = pathname.split('/').pop() ?? '';
+  const widthMatch = filename.match(/^(\d{2,5})px\.(?:png|jpe?g|webp|gif|avif)$/i);
+
+  if (widthMatch) {
+    return {
+      url,
+      width: Number(widthMatch[1]),
+      priority: 0,
+      order
+    };
+  }
+
+  const namedVariant = filename.match(
+    /^(original|orig|full|master|large)\.(?:png|jpe?g|webp|gif|avif)$/i
+  );
+
+  return {
+    url,
+    width: 0,
+    priority: namedVariant ? 10 : 1,
+    order
+  };
+}
+
+/**
+ * Одна и та же картинка на LOR может быть представлена как:
+ *   500px.jpg, 1000px.jpg, 1500px.jpg, 2000px.jpg
+ * или как original/full/master и т.п.
+ *
+ * Не подменяем URL на выдуманный /original.jpg — его может вообще не быть.
+ * Вместо этого группируем варианты одной директории и выбираем самый
+ * качественный реально найденный URL.
  */
-function canonicalImageUrl(url: string): string {
+function groupKey(url: string): string {
   try {
     const parsed = new URL(url);
-
-    parsed.pathname = parsed.pathname.replace(
-      /\/(?:500px|1000px|1500px|2000px)\.(png|jpe?g|webp|gif|avif)$/i,
-      '/original.$1'
-    );
-
-    return parsed.href;
+    const pathname = parsed.pathname;
+    const directory = pathname.slice(0, pathname.lastIndexOf('/') + 1);
+    return `${parsed.origin}${directory}`;
   } catch {
     return url;
+  }
+}
+
+function parseSrcset(
+  value: string,
+  baseUrl: string,
+  add: (url: string, widthHint?: number) => void
+): void {
+  for (const chunk of value.split(',')) {
+    const parts = chunk.trim().split(/\s+/);
+    if (!parts[0]) {
+      continue;
+    }
+
+    const width = parts[1]?.match(/^(\d+)w$/i)?.[1];
+    const normalized = normalizeUrl(parts[0], baseUrl);
+    if (normalized) {
+      add(normalized, width ? Number(width) : undefined);
+    }
   }
 }
 
@@ -64,73 +117,84 @@ export class LorImageExtractor implements ImageExtractor {
 
   extract(item: AtomItem): string[] {
     const source = decode(itemHtmlContent(item));
-    const urls = new Map<string, string>();
+    const candidates: ImageCandidate[] = [];
+    let order = 0;
 
-    /*
-     * Приоритет: <a itemprop="contentURL" href=".../original.jpg">.
-     * Это именно оригиналы изображений, а не preview.
-     */
-    const anchorRegex = /<a\b[^>]*>/gi;
-
-    for (const match of source.matchAll(anchorRegex)) {
-      const anchor = match[0];
-
-      if (!/\bitemprop\s*=\s*["']contentURL["']/i.test(anchor)) {
-        continue;
-      }
-
-      const href = anchor.match(/\bhref\s*=\s*["']([^"']+)["']/i)?.[1];
-
-      if (!href) {
-        continue;
-      }
-
-      const normalized = normalizeUrl(href, this.baseUrl);
-
+    const add = (value: string, widthHint?: number): void => {
+      const normalized = normalizeUrl(value, this.baseUrl);
       if (!normalized) {
-        continue;
+        return;
       }
 
-      const canonical = canonicalImageUrl(normalized);
-      urls.set(canonical, canonical);
+      const candidate = getCandidateInfo(normalized, order++);
+      if (widthHint && candidate.width === 0) {
+        candidate.width = widthHint;
+      }
+      candidates.push(candidate);
+    };
+
+    // href/src/data-* у ссылок, img и source.
+    const attributeRegex =
+      /<(?:a|img|source|picture)\b[^>]*\b(?:href|src|data-src|data-original|data-full|data-url)\s*=\s*["']([^"']+)["'][^>]*>/gi;
+
+    for (const match of source.matchAll(attributeRegex)) {
+      add(match[1]);
     }
 
-    /*
-     * Fallback: если у картинки нет contentURL, берём src.
-     * Это позволяет обработать RSS даже при изменении HTML-шаблона LOR.
-     */
-    const imageAttributeRegex =
-      /<(?:img|source)\b[^>]*\b(?:src|data-src|data-original)\s*=\s*["']([^"']+)["'][^>]*>/gi;
+    // Responsive images: srcset="...500w, ...1000w, ...1500w".
+    const srcsetRegex =
+      /\b(?:srcset|data-srcset)\s*=\s*["']([^"']+)["']/gi;
 
-    for (const match of source.matchAll(imageAttributeRegex)) {
-      const normalized = normalizeUrl(match[1], this.baseUrl);
-
-      if (!normalized) {
-        continue;
-      }
-
-      const canonical = canonicalImageUrl(normalized);
-
-      if (!urls.has(canonical)) {
-        urls.set(canonical, canonical);
-      }
+    for (const match of source.matchAll(srcsetRegex)) {
+      parseSrcset(match[1], this.baseUrl, add);
     }
 
-    return [...urls.values()];
+    // Иногда LOR оставляет URL картинки обычным текстом в HTML.
+    const rawUrlRegex =
+      /(?:https?:\/\/(?:www\.)?linux\.org\.ru|)(?:\/(?:images|photos)\/[^\s"'<>),]+\.(?:png|jpe?g|webp|gif|avif))/gi;
+
+    for (const match of source.matchAll(rawUrlRegex)) {
+      const value = match[0].startsWith('http')
+        ? match[0]
+        : match[0];
+      add(value);
+    }
+
+    // Группируем варианты одной картинки и выбираем лучший реально найденный.
+    const groups = new Map<string, ImageCandidate[]>();
+
+    for (const candidate of candidates) {
+      const key = groupKey(candidate.url);
+      const list = groups.get(key) ?? [];
+      list.push(candidate);
+      groups.set(key, list);
+    }
+
+    return [...groups.values()]
+      .sort((a, b) => Math.min(...a.map(x => x.order)) - Math.min(...b.map(x => x.order)))
+      .map(list =>
+        [...list].sort((a, b) =>
+          b.priority - a.priority ||
+          b.width - a.width ||
+          a.order - b.order
+        )[0].url
+      );
   }
 }
 
-/** Убирает блоки картинок и строку с тегами из описания LOR-поста. */
+/** Убирает изображения, preview-блоки и строку с тегами из описания LOR-поста. */
 export function extractLorDescription(item: AtomItem): string {
-  const cleaned = decode(itemHtmlContent(item))
+  return decode(itemHtmlContent(item))
     .replace(
       /<div\b[^>]*class\s*=\s*["'][^"']*\bmedium-image-container\b[^"']*["'][^>]*>[\s\S]*?<\/div>/gi,
       ''
     )
+    .replace(/<picture\b[^>]*>[\s\S]*?<\/picture>/gi, '')
+    .replace(/<figure\b[^>]*>[\s\S]*?<\/figure>/gi, '')
+    .replace(/<img\b[^>]*>/gi, '')
+    .replace(/<source\b[^>]*>/gi, '')
     .replace(
       /<p\b[^>]*class\s*=\s*["'][^"']*\btags\b[^"']*["'][^>]*>[\s\S]*?<\/p>/gi,
       ''
     );
-
-  return cleaned;
 }

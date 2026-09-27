@@ -14,7 +14,6 @@ export interface Env {
   DEFAULT_POLL_INTERVAL_MS: number;
   DEFAULT_REQUEST_TIMEOUT_MS: number;
   USER_AGENT: string;
-
   LOG_LEVEL: 'debug' | 'info' | 'warn' | 'error';
 
   IMAGE_DOWNLOAD_TIMEOUT_MS: number;
@@ -101,14 +100,12 @@ function logLevel(errors: EnvErrors): Env['LOG_LEVEL'] {
 
 export function loadEnv(): Env {
   const errors = new EnvErrors();
-
   const env: Env = {
     VK_TOKEN: requiredString('VK_TOKEN', errors),
 
     TARGET_CHAT: numberWithDefault('TARGET_CHAT', 2_000_000_001, errors),
     ADMIN_CHAT: numberWithDefault('ADMIN_CHAT', 2_000_000_003, errors),
     OWNER_ID: numberWithDefault('OWNER_ID', 281_457_599, errors),
-
     DEFAULT_POLL_INTERVAL_MS: numberWithDefault(
       'DEFAULT_POLL_INTERVAL_MS',
       60_000,
@@ -122,7 +119,6 @@ export function loadEnv(): Env {
     USER_AGENT: stringWithDefault('USER_AGENT', 'VK-Feed-Bot/2.0'),
 
     LOG_LEVEL: logLevel(errors),
-
     IMAGE_DOWNLOAD_TIMEOUT_MS: numberWithDefault(
       'IMAGE_DOWNLOAD_TIMEOUT_MS',
       60_000,
@@ -133,7 +129,6 @@ export function loadEnv(): Env {
       90_000,
       errors
     ),
-
     OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || undefined,
     OPENROUTER_MODEL: stringWithDefault('OPENROUTER_MODEL', 'z-ai/glm-5.2:free'),
     OPENROUTER_MODEL_NAME: stringWithDefault('OPENROUTER_MODEL_NAME', 'GLM 5.2'),
@@ -142,8 +137,7 @@ export function loadEnv(): Env {
       'templates/ai_comment.txt'
     ),
     OPENROUTER_TIMEOUT_MS: numberWithDefault('OPENROUTER_TIMEOUT_MS', 30_000, errors),
-    OPENROUTER_MAX_TOKENS: numberWithDefault('OPENROUTER_MAX_TOKENS', 300, errors),
-
+    OPENROUTER_MAX_TOKENS: numberWithDefault('OPENROUTER_MAX_TOKENS', 700, errors),
     DATABASE_PATH: stringWithDefault('DATABASE_PATH', 'data/bot.db'),
     SOURCES_FILE: stringWithDefault('SOURCES_FILE', 'config/sources.yml')
   };
