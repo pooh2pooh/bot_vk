@@ -15,6 +15,7 @@ import { FeedProcessor } from './feed/processor.js';
 import { TemplateManager } from './templates/manager.js';
 import { CommandHandler } from './commands/handler.js';
 import { OpenRouterCommentService } from './ai/openrouter.js';
+import { ErrorBackoff } from './utils/error-backoff.js';
 
 async function main(): Promise<void> {
   await mkdir('data', { recursive: true });
@@ -191,46 +192,83 @@ async function main(): Promise<void> {
     () => void shutdown('SIGTERM')
   );
 
-  const loop = async (): Promise<void> => {
+  const forumBackoff = new ErrorBackoff();
+  const screenshotBackoff = new ErrorBackoff();
+
+  const formatDelay = (ms: number): string => {
+    const minutes = Math.round(ms / 60_000);
+    return minutes >= 60
+      ? `${Math.round(minutes / 60)} ч.`
+      : `${minutes} мин.`;
+  };
+
+  const runFeedLoop = async (
+    name: string,
+    processor: FeedProcessor,
+    backoff: ErrorBackoff
+  ): Promise<void> => {
     if (stopped) {
       return;
     }
 
     try {
-      await forumProcessor.check();
-    } catch (error) {
-      await logger.error(
-        `Forum feed check failed: ${
-          error instanceof Error
-            ? error.message
-            : String(error)
-        }`
-      );
-    }
+      await processor.check();
 
-    try {
-      await screenshotProcessor.check();
+      const recovery = backoff.success();
+
+      if (recovery.hadFailures) {
+        await logger.info(
+          `✅ ${name} feed recovered after ${recovery.count} failed attempt(s).`
+        );
+      }
     } catch (error) {
-      await logger.error(
-        `Screenshot feed check failed: ${
-          error instanceof Error
-            ? error.message
-            : String(error)
-        }`
-      );
+      const failure = backoff.fail(error);
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      // Одинаковые последовательные ошибки не спамят лог и админ-чат.
+      if (failure.shouldLog) {
+        await logger.error(
+          `${name} feed check failed: ${message}\n` +
+          `Следующая попытка через ${formatDelay(failure.delayMs)}.`
+        );
+      } else {
+        console.warn(
+          `[BACKOFF] ${name}: same error #${failure.count}; ` +
+          `next attempt in ${formatDelay(failure.delayMs)}`
+        );
+      }
+
+      if (!stopped) {
+        setTimeout(
+          () => void runFeedLoop(name, processor, backoff),
+          failure.delayMs
+        );
+      }
+
+      return;
     }
 
     if (!stopped) {
       setTimeout(
-        loop,
+        () => void runFeedLoop(name, processor, backoff),
         config.pollIntervalMs
       );
     }
   };
 
-  setTimeout(
-    loop,
-    config.pollIntervalMs
+  void runFeedLoop(
+    'Forum',
+    forumProcessor,
+    forumBackoff
+  );
+
+  void runFeedLoop(
+    'Screenshot',
+    screenshotProcessor,
+    screenshotBackoff
   );
 }
 
