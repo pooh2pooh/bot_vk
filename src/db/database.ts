@@ -3,6 +3,12 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { Admin, FeedEntry } from '../core/types.js';
+import { toIsoDate } from '../core/text-utils.js';
+
+/**
+ * Текущая версия схемы. Поднимается на 1, когда в базу добавляется миграция.
+ */
+const SCHEMA_VERSION = 1;
 
 interface FeedEntryRow {
   id: string;
@@ -18,6 +24,16 @@ interface FeedEntryRow {
 
 export class BotDatabase {
   private readonly db: Database.Database;
+
+  /**
+   * Готовые prepared statements.
+   *
+   * better-sqlite3 компилирует SQL при каждом .prepare(), а конвейер дёргает
+   * одни и те же запросы тысячи раз за жизнь процесса. Кеш убирает повторную
+   * компиляцию и заодно убирает разбросанные по методам .prepare() в одну
+   * точку.
+   */
+  private readonly statements = new Map<string, Database.Statement>();
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
@@ -68,23 +84,105 @@ export class BotDatabase {
       CREATE INDEX IF NOT EXISTS idx_feed_entries_source_published
       ON feed_entries(source, published);
     `);
+
+    /*
+     * user_version — встроенный в SQLite счётчик схемы. Он нужен здесь, чтобы
+     * перевод дат в ISO выполнялся ОДИН раз: normalizeDates() читает всю
+     * таблицу, и повторять это на каждом старте — лишняя работа, растущая с
+     * числом записей. Идемпотентности миграции мы всё равно не доверяем, если
+     * версия вдруг окажется ниже ожидаемой (откат даумапа, старая копия БД).
+     */
+    if (this.schemaVersion < SCHEMA_VERSION) {
+      this.normalizeDates();
+      this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    }
+  }
+
+  private get schemaVersion(): number {
+    const row = this.db.pragma('user_version', { simple: true });
+    return typeof row === 'number' ? row : 0;
+  }
+
+  /**
+   * Разовый перевод сохранённых дат в ISO-8601.
+   *
+   * До этого published/updated писались как есть, в формате RFC-822, и
+   * SQLite сравнивал их как текст: "29 Jul" > "23 Sep" лексикографически.
+   * Из-за этого getLatestEntry возвращал не последний пост. Новые записи уже
+   * пишутся в ISO, но старые остались бы сломанными, пока их не переписал бы
+   * очередной poll (а он их не переписывает — INSERT OR IGNORE).
+   *
+   * Идемпотентна: строки, которые уже ISO, `toIsoDate` не трогает — а
+   * распознать их можно простым признаком формата.
+   */
+  private normalizeDates(): void {
+    const rows = this.statement(
+      `SELECT id, published, updated FROM feed_entries`
+    ).all() as { id: string; published: string; updated: string }[];
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    const update = this.statement(
+      `UPDATE feed_entries SET published = ?, updated = ? WHERE id = ?`
+    );
+
+    const migrate = this.db.transaction((items: typeof rows) => {
+      let changed = 0;
+
+      for (const row of items) {
+        const published = toIsoDate(row.published);
+        const updated = toIsoDate(row.updated);
+
+        if (!published || !updated) {
+          continue;
+        }
+
+        if (published === row.published && updated === row.updated) {
+          continue;
+        }
+
+        update.run(published, updated, row.id);
+        changed++;
+      }
+
+      return changed;
+    });
+
+    migrate(rows);
+  }
+
+  /** Компилирует запрос один раз и переиспользует его дальше. */
+  private statement(sql: string): Database.Statement {
+    const cached = this.statements.get(sql);
+
+    if (cached) {
+      return cached;
+    }
+
+    const prepared = this.db.prepare(sql);
+    this.statements.set(sql, prepared);
+
+    return prepared;
   }
 
   close(): void {
+    this.statements.clear();
     this.db.close();
   }
 
   hasFeedEntry(id: string): boolean {
-    const row = this.db
-      .prepare(`SELECT 1 FROM feed_entries WHERE id = ? LIMIT 1`)
+    const row = this
+      .statement(`SELECT 1 FROM feed_entries WHERE id = ? LIMIT 1`)
       .get(id);
 
     return Boolean(row);
   }
 
   addFeedEntry(entry: FeedEntry): void {
-    this.db
-      .prepare(`
+    this
+      .statement(`
         INSERT OR IGNORE INTO feed_entries (
           id, title, link, author, content, published, updated,
           first_seen_at, source, image_urls_json
@@ -105,9 +203,22 @@ export class BotDatabase {
       );
   }
 
+  /**
+   * Перезаписывает список картинок уже сохранённой записи.
+   *
+   * Нужно, когда логика извлечения картинок изменилась, а записи в базе
+   * содержат результат старой разметки: без этого каждый resend отправлял бы
+   * заведомо устаревший список вложений.
+   */
+  updateEntryImages(id: string, imageUrls: string[]): void {
+    this
+      .statement(`UPDATE feed_entries SET image_urls_json = ? WHERE id = ?`)
+      .run(JSON.stringify(imageUrls), id);
+  }
+
   markSent(id: string): void {
-    this.db
-      .prepare(`
+    this
+      .statement(`
         UPDATE feed_entries
         SET sent_at = ?, ignored_at = NULL
         WHERE id = ?
@@ -116,8 +227,8 @@ export class BotDatabase {
   }
 
   markIgnored(id: string): void {
-    this.db
-      .prepare(`
+    this
+      .statement(`
         UPDATE feed_entries
         SET ignored_at = ?
         WHERE id = ? AND sent_at IS NULL
@@ -126,8 +237,8 @@ export class BotDatabase {
   }
 
   getLatestEntry(sourceId: string): FeedEntry | null {
-    const row = this.db
-      .prepare(`
+    const row = this
+      .statement(`
         SELECT id, title, link, author, content, published, updated, source, image_urls_json
         FROM feed_entries
         WHERE source = ?
@@ -135,19 +246,6 @@ export class BotDatabase {
         LIMIT 1
       `)
       .get(sourceId) as FeedEntryRow | undefined;
-
-    return row ? this.toFeedEntry(row) : null;
-  }
-
-  getEntry(id: string): FeedEntry | null {
-    const row = this.db
-      .prepare(`
-        SELECT id, title, link, author, content, published, updated, source, image_urls_json
-        FROM feed_entries
-        WHERE id = ?
-        LIMIT 1
-      `)
-      .get(id) as FeedEntryRow | undefined;
 
     return row ? this.toFeedEntry(row) : null;
   }
@@ -180,33 +278,43 @@ export class BotDatabase {
     };
   }
 
-  getEntrySentStatus(id: string): boolean {
-    const row = this.db
-      .prepare(`SELECT sent_at FROM feed_entries WHERE id = ? LIMIT 1`)
-      .get(id) as { sent_at: string | null } | undefined;
-
-    return Boolean(row?.sent_at);
-  }
-
-  getEntryIgnoredStatus(id: string): boolean {
-    const row = this.db
-      .prepare(`SELECT ignored_at FROM feed_entries WHERE id = ? LIMIT 1`)
-      .get(id) as { ignored_at: string | null } | undefined;
-
-    return Boolean(row?.ignored_at);
-  }
-
+  /**
+   * Обработана ли запись: отправлена ИЛИ помечена проигнорированной.
+   *
+   * Единая точка правды о «пост уже не новый». Отдельные проверки sent/ignored
+   * в разных местах обязаны были сходиться, и любая из них не совпала бы —
+   * пост отправился бы повторно или, наоборот, потерялся.
+   */
   getEntryHandledStatus(id: string): boolean {
-    const row = this.db
-      .prepare(`SELECT sent_at, ignored_at FROM feed_entries WHERE id = ? LIMIT 1`)
+    return this.handledFlags(id).handled;
+  }
+
+  /**
+   * Все обработанные записи одним запросом.
+   *
+   * Нужно конвейеру перед разбором фида: он отдаёт адаптеру id уже известных
+   * постов, чтобы адаптер не извлекал для них картинки и не ходил на страницы.
+   * Один SELECT вместо запроса на каждый элемент фида.
+   */
+  getHandledEntryIds(): ReadonlySet<string> {
+    const rows = this.statement(
+      `SELECT id FROM feed_entries WHERE sent_at IS NOT NULL OR ignored_at IS NOT NULL`
+    ).all() as { id: string }[];
+
+    return new Set(rows.map(row => row.id));
+  }
+
+  private handledFlags(id: string): { handled: boolean } {
+    const row = this
+      .statement(`SELECT sent_at, ignored_at FROM feed_entries WHERE id = ? LIMIT 1`)
       .get(id) as { sent_at: string | null; ignored_at: string | null } | undefined;
 
-    return Boolean(row?.sent_at || row?.ignored_at);
+    return { handled: Boolean(row?.sent_at || row?.ignored_at) };
   }
 
   addAdmin(userId: number, role: 'owner' | 'admin' = 'admin'): void {
-    this.db
-      .prepare(`
+    this
+      .statement(`
         INSERT INTO admins (user_id, role, created_at)
         VALUES (?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET role = excluded.role
@@ -215,28 +323,28 @@ export class BotDatabase {
   }
 
   removeAdmin(userId: number): void {
-    this.db.prepare(`DELETE FROM admins WHERE user_id = ?`).run(userId);
+    this.statement(`DELETE FROM admins WHERE user_id = ?`).run(userId);
   }
 
   isAdmin(userId: number): boolean {
-    const row = this.db
-      .prepare(`SELECT 1 FROM admins WHERE user_id = ? LIMIT 1`)
+    const row = this
+      .statement(`SELECT 1 FROM admins WHERE user_id = ? LIMIT 1`)
       .get(userId);
 
     return Boolean(row);
   }
 
   isOwner(userId: number): boolean {
-    const row = this.db
-      .prepare(`SELECT 1 FROM admins WHERE user_id = ? AND role = 'owner' LIMIT 1`)
+    const row = this
+      .statement(`SELECT 1 FROM admins WHERE user_id = ? AND role = 'owner' LIMIT 1`)
       .get(userId);
 
     return Boolean(row);
   }
 
   getAdmins(): Admin[] {
-    return this.db
-      .prepare(`
+    return this
+      .statement(`
         SELECT user_id AS userId, role, created_at AS createdAt
         FROM admins
         ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, user_id
@@ -245,16 +353,16 @@ export class BotDatabase {
   }
 
   getSetting(key: string): string | null {
-    const row = this.db
-      .prepare(`SELECT value FROM settings WHERE key = ? LIMIT 1`)
+    const row = this
+      .statement(`SELECT value FROM settings WHERE key = ? LIMIT 1`)
       .get(key) as { value: string } | undefined;
 
     return row?.value ?? null;
   }
 
   setSetting(key: string, value: string): void {
-    this.db
-      .prepare(`
+    this
+      .statement(`
         INSERT INTO settings (key, value)
         VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -273,16 +381,16 @@ export class BotDatabase {
   }
 
   getStats(): { totalEntries: number; sentEntries: number; admins: number } {
-    const entries = this.db
-      .prepare(`
+    const entries = this
+      .statement(`
         SELECT COUNT(*) AS total,
                SUM(CASE WHEN sent_at IS NOT NULL THEN 1 ELSE 0 END) AS sent
         FROM feed_entries
       `)
       .get() as { total: number; sent: number | null };
 
-    const admins = this.db
-      .prepare(`SELECT COUNT(*) AS count FROM admins`)
+    const admins = this
+      .statement(`SELECT COUNT(*) AS count FROM admins`)
       .get() as { count: number };
 
     return {
@@ -293,8 +401,8 @@ export class BotDatabase {
   }
 
   getEntriesPerSource(): Record<string, number> {
-    const rows = this.db
-      .prepare(`SELECT source, COUNT(*) AS count FROM feed_entries GROUP BY source`)
+    const rows = this
+      .statement(`SELECT source, COUNT(*) AS count FROM feed_entries GROUP BY source`)
       .all() as Array<{ source: string; count: number }>;
 
     return Object.fromEntries(rows.map(row => [row.source, row.count]));

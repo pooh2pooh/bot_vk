@@ -1,5 +1,3 @@
-import { mkdir } from 'node:fs/promises';
-
 import { loadConfig } from './config/index.js';
 import { BotDatabase } from './db/database.js';
 
@@ -11,31 +9,37 @@ import { Logger } from './logger/logger.js';
 import { TemplateManager } from './templates/manager.js';
 import { CommandHandler } from './commands/handler.js';
 
-import { buildRegistries, resolveEnricherForSource } from './registries.js';
+import { buildRegistries, resolveEnricherForSource, validateSources } from './registries.js';
 import { SourcePipeline } from './pipeline/source-pipeline.js';
 import { Scheduler } from './pipeline/scheduler.js';
+import { toMessage } from './utils/to-message.js';
 
 async function main(): Promise<void> {
   const config = await loadConfig();
 
-  await mkdir('data', { recursive: true });
-
+  // Каталог под базу создаёт сам BotDatabase — mkdir в двух местах означал бы
+  // два места, где путь к базе может разойтись.
   const db = new BotDatabase(config.databasePath);
   db.addAdmin(config.ownerId, 'owner');
 
   const vk = createVK(config.vkToken);
 
-  const sender = new VKSender(
+  const sender = new VKSender({
     vk,
-    3,
-    config.imageDownloadTimeoutMs,
-    config.vkUploadTimeoutMs
-  );
+    userAgent: config.userAgent,
+    imageDownloadTimeoutMs: config.imageDownloadTimeoutMs,
+    uploadTimeoutMs: config.vkUploadTimeoutMs
+  });
 
   const logger = new Logger(sender, config.adminChat, config.logLevel);
 
   const templates = new TemplateManager();
   const registries = buildRegistries(config);
+
+  // Проверяем sources.yml до сборки пайплайнов: опечатка в imageExtractor или
+  // enrich: openrouter без OPENROUTER_API_KEY должна дать один понятный список
+  // проблем, а не падение где-то в середине цикла.
+  validateSources(registries, config.sources);
 
   if (registries.openRouterEnricher) {
     await registries.openRouterEnricher.loadPrompt();
@@ -62,7 +66,23 @@ async function main(): Promise<void> {
       templates,
       sender,
       logger,
-      targetChat: config.targetChat
+      targetChat: config.targetChat,
+      fallbackTextLimit: sourceConfig.fallbackTextLimit,
+      /*
+       * Текст для fallback'а берём у ЭКСТРАКТОРА источника, а не у адаптера:
+       * именно стратегия сайта умеет ходить на страницу поста. Универсально,
+       * без упоминания pingvinus: если стратегия этого не умеет, остаётся
+       * текст из фида (возможно, пустой).
+       */
+      fetchOriginalText: link => {
+        const extractor = registries.imageExtractors.resolve(
+          sourceConfig.imageExtractor
+        );
+
+        return extractor.extractTextFromUrl
+          ? extractor.extractTextFromUrl(link)
+          : Promise.resolve('');
+      }
     });
 
     pipelines.set(sourceConfig.id, pipeline);
@@ -92,28 +112,43 @@ async function main(): Promise<void> {
     openRouterEnricher: registries.openRouterEnricher
   });
 
-  try {
+  // Ошибка первичной загрузки фида — проблема ЭТОГО источника, а не всего
+  // бота: каждый источник всё равно переживает собственный backoff-цикл, и
+  // недоступный фид не должен мешать работать остальным.
+  const initFailures = (
     await Promise.all(
-      [...pipelines.values()].map(pipeline => pipeline.initialize())
-    );
-  } catch (error) {
+      [...pipelines.values()].map(async pipeline => {
+        try {
+          await pipeline.initialize();
+          return null;
+        } catch (error) {
+          return { name: pipeline.sourceName, message: toMessage(error) };
+        }
+      })
+    )
+  ).filter(failure => failure !== null);
+
+  if (initFailures.length > 0) {
+    const summary = initFailures
+      .map(failure => `  - ${failure.name}: ${failure.message}`)
+      .join('\n');
+
     await logger.error(
-      `Initial feed load failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
+      [
+        `Initial feed load failed for ${initFailures.length} of ${pipelines.size} source(s):`,
+        summary,
+        'These sources will retry on their own schedule; the bot keeps running.'
+      ].join('\n')
     );
-    throw error;
+
+    console.error(`[INIT] Initial feed load failed:\n${summary}`);
   }
 
   vk.updates.on('message_new', async ctx => {
     try {
       await commands.handle(ctx);
     } catch (error) {
-      await logger.error(
-        `Message handler failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      await logger.error(`Message handler failed: ${toMessage(error)}`);
     }
   });
 

@@ -3,21 +3,79 @@ import { randomInt } from 'node:crypto';
 import type { VK } from 'vk-io';
 
 import type { ImageDownloadFailure } from '../core/types.js';
-
-export type { ImageDownloadFailure };
+import { toMessage } from '../utils/to-message.js';
 
 const VK_MAX_ATTACHMENTS_PER_MESSAGE = 10;
-const IMAGE_DOWNLOAD_RETRIES = 3;
+
+/** Ошибка запроса картинки с сохранённым HTTP-статусом. */
+class HttpStatusError extends Error {
+  constructor(
+    readonly status: number,
+    statusText: string
+  ) {
+    super(`Image request failed: HTTP ${status} ${statusText}`);
+  }
+}
+
+/**
+ * Стоит ли повторять запрос после этой ошибки.
+ *
+ * HTTP-статус известен в момент ответа, поэтому решение принимается по нему
+ * самому, а не разбором строки сообщения. Исключения — 408 и 429: там сервер
+ * прямо просит повторить позже.
+ */
+function isPermanentHttpError(error: unknown): boolean {
+  if (!(error instanceof HttpStatusError)) {
+    return false;
+  }
+
+  const { status } = error;
+
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+/** Отрезает параметры от MIME-типа: `image/jpeg; charset=binary` -> `image/jpeg`. */
+function bareContentType(value: string): string {
+  return value.split(';', 1).join('').trim();
+}
+
+export interface VKSenderOptions {
+  vk: VK;
+  /** Попыток отправки сообщения в VK (с задержкой 1с * номер попытки). */
+  retries?: number;
+  /** Попыток скачивания одной картинки (с задержкой 1.5с * номер попытки). */
+  imageDownloadRetries?: number;
+  imageDownloadTimeoutMs?: number;
+  uploadTimeoutMs?: number;
+  /** Тот же User-Agent, что и для RSS-запросов: часть сайтов режет кадры ботов. */
+  userAgent?: string;
+  /**
+   * Пауза между попытками. Продёргивается в тестах, иначе проверка повторов
+   * на настоящих таймерах шла бы на секунды.
+   */
+  sleep?: (ms: number) => Promise<void>;
+}
 
 export class VKSender {
+  private readonly vk: VK;
   private readonly imageErrors: ImageDownloadFailure[] = [];
 
-  constructor(
-    private readonly vk: VK,
-    private readonly retries = 3,
-    private readonly imageDownloadTimeoutMs = 60_000,
-    private readonly uploadTimeoutMs = 90_000
-  ) {}
+  private readonly retries: number;
+  private readonly imageDownloadRetries: number;
+  private readonly imageDownloadTimeoutMs: number;
+  private readonly uploadTimeoutMs: number;
+  private readonly userAgent: string;
+  private readonly sleep: (ms: number) => Promise<void>;
+
+  constructor(options: VKSenderOptions) {
+    this.vk = options.vk;
+    this.retries = options.retries ?? 3;
+    this.imageDownloadRetries = options.imageDownloadRetries ?? 3;
+    this.imageDownloadTimeoutMs = options.imageDownloadTimeoutMs ?? 60_000;
+    this.uploadTimeoutMs = options.uploadTimeoutMs ?? 90_000;
+    this.userAgent = options.userAgent ?? 'VK-Feed-Bot/2.0';
+    this.sleep = options.sleep ?? defaultSleep;
+  }
 
   /** Забирает ошибки картинок после send() и очищает накопитель. */
   consumeImageErrors(): ImageDownloadFailure[] {
@@ -64,7 +122,7 @@ export class VKSender {
         index === 0
           ? message
           : `📸 Продолжение галереи (${index + 1}/${batches.length})`,
-        batches[index]
+        batches[index] ?? []
       );
     }
 
@@ -100,9 +158,7 @@ export class VKSender {
             // Битая/недоступная картинка не должна ломать весь пост.
             this.imageErrors.push({
               url: imageUrl,
-              message: error instanceof Error
-                ? error.message
-                : String(error)
+              message: toMessage(error)
             });
             continue;
           }
@@ -142,7 +198,7 @@ export class VKSender {
         lastError = error;
 
         if (attempt < this.retries) {
-          await this.delay(attempt * 1000);
+          await this.sleep(attempt * 1000);
         }
       }
     }
@@ -161,7 +217,7 @@ export class VKSender {
 
     for (
       let attempt = 1;
-      attempt <= IMAGE_DOWNLOAD_RETRIES;
+      attempt <= this.imageDownloadRetries;
       attempt++
     ) {
       const controller = new AbortController();
@@ -174,39 +230,22 @@ export class VKSender {
         const response = await fetch(url, {
           signal: controller.signal,
           headers: {
-            'User-Agent': 'ManjaroRU-VK-Feed-Bot/1.0',
+            'User-Agent': this.userAgent,
             Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
           },
           redirect: 'follow'
         });
 
         if (!response.ok) {
-          const error = new Error(
-            `Image request failed: HTTP ${response.status} ${response.statusText}`
-          );
-
-          // 4xx обычно постоянные ошибки URL — повторять такой запрос нет смысла.
-          if (
-            response.status >= 400 &&
-            response.status < 500 &&
-            response.status !== 408 &&
-            response.status !== 429
-          ) {
-            throw error;
-          }
-
-          lastError = error;
-          throw error;
+          throw new HttpStatusError(response.status, response.statusText);
         }
 
         const contentType =
-          response.headers.get('content-type') ??
-          'image/jpeg';
+          bareContentType(
+            response.headers.get('content-type') ?? 'image/jpeg'
+          );
 
-        if (
-          contentType &&
-          !contentType.toLowerCase().startsWith('image/')
-        ) {
+        if (!contentType.toLowerCase().startsWith('image/')) {
           throw new Error(
             `Image URL returned unexpected content-type: ${contentType}`
           );
@@ -222,38 +261,35 @@ export class VKSender {
 
         return {
           buffer,
-          contentType: contentType.split(';', 1)[0],
+          contentType,
           filename: this.getFilename(url, contentType)
         };
       } catch (error) {
-        lastError =
-          error instanceof Error &&
-          error.name === 'AbortError'
+        const failure =
+          error instanceof Error && error.name === 'AbortError'
             ? new Error(
                 `Image download timeout after ${this.imageDownloadTimeoutMs} ms: ${url}`
               )
             : error;
 
-        // Постоянную 4xx ошибку не повторяем.
-        if (this.isPermanentHttpError(lastError)) {
+        lastError = failure;
+
+        // 4xx — это почти всегда битый URL, а не временная проблема сети.
+        // Повторять такой запрос бессмысленно, поэтому выходим сразу, кроме
+        // двух случаев, когда сервер прямо просит подождать.
+        if (isPermanentHttpError(failure)) {
           break;
         }
       } finally {
         clearTimeout(timeout);
       }
 
-      if (attempt < IMAGE_DOWNLOAD_RETRIES) {
-        await this.delay(attempt * 1500);
+      if (attempt < this.imageDownloadRetries) {
+        await this.sleep(attempt * 1500);
       }
     }
 
     throw lastError;
-  }
-
-  private isPermanentHttpError(error: unknown): boolean {
-    return error instanceof Error &&
-      /^Image request failed: HTTP 4\d{2} /.test(error.message) &&
-      !/^Image request failed: HTTP (408|429) /.test(error.message);
   }
 
   private getFilename(
@@ -276,7 +312,6 @@ export class VKSender {
 
     const extension =
       contentType
-        .split(';', 1)[0]
         .split('/')
         .pop()
         ?.replace(/[^a-z0-9]/gi, '') || 'jpg';
@@ -284,9 +319,8 @@ export class VKSender {
     return `screenshot.${extension}`;
   }
 
-  private delay(ms: number): Promise<void> {
-    return new Promise(resolve =>
-      setTimeout(resolve, ms)
-    );
-  }
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }

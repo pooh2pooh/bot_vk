@@ -16,10 +16,5 @@ export interface AtomItem {
   description?: string;
   author?: string | AtomAuthor;
   creator?: string;
-  categories?: string[];
-  enclosure?: {
-    url?: string;
-    type?: string;
-  };
   ['content:encoded']?: string;
 }

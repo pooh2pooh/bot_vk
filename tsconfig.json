@@ -8,6 +8,23 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
 
+    // Дополнительная строгость поверх strict. Каждый флаг ниже уже поймал
+    // реальный баг или мёртвый код при включении:
+    //   noUnusedLocals/Parameters — мёртвый getEntry() и «пустые» проверки
+    //   noUncheckedIndexedAccess  — выходы за границы массивов и .pop()
+    //   noImplicitReturns        — забытый return в ветке switch/try
+    //   noFallthroughCasesInSwitch — молчаливый fallthrough в обработчиках команд
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": false,
+
+    // Source maps: стектрейсы из pm2 указывают на исходники, а не на dist.
+    "sourceMap": true,
+    "inlineSources": true,
+
     "outDir": "dist",
     "rootDir": "src",
 
@@ -16,5 +33,8 @@
   },
   "include": [
     "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/test"
   ]
 }

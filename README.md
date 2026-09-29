@@ -49,6 +49,7 @@ Telegram-канал), или сайт верстает картинки по-с�
 ```ts
 // src/registries.ts
 imageExtractors.register('my-site', new MySiteImageExtractor());
+descriptionExtractors.register('my-site', extractMySiteDescription);
 sourceAdapters.register('telegram', cfg => new TelegramSourceAdapter(cfg));
 enrichers.register('summarizer', new SummarizerEnricher(...));
 ```
@@ -58,12 +59,61 @@ enrichers.register('summarizer', new SummarizerEnricher(...));
 | Точка расширения | Интерфейс | Где живёт |
 | --- | --- | --- |
 | Новый тип источника | `SourceAdapter` (`fetch(): Promise<FeedEntry[]>`) | `src/core/source-adapter.ts` |
-| Новый способ достать картинки | `ImageExtractor` (`extract(item): string[]`) | `src/core/image-extractor.ts` |
+| Новый способ достать картинки | `ImageExtractor` (`extract(item): Promise<string[]>`) | `src/core/image-extractor.ts` |
+| Новый способ вырезать описание | `DescriptionExtractor` (`(item) => string`) | `src/core/description-extractor.ts` |
 | Новый способ обогащения контента | `Enricher` (`enrich(entry): Promise<EnrichResult>`) | `src/core/enricher.ts` |
+
+`ImageExtractor` и `DescriptionExtractor` регистрируются под **одним и тем же
+ключом**, поэтому особенности сайта описываются в `sources.yml` единственным
+полем `imageExtractor: <ключ>`, а в `registries.ts` нет сравнений вида
+`if (source.imageExtractor === 'lor')`. Добавить второй сайт с собственной
+разметкой — значит зарегистрировать для него обе стратегии, ничего не трогая
+в остальном коде.
+
+Метод `extract()` асинхронный не для красоты: у экстрактора есть право
+догружать то, чего нет в фиде. Конкретный случай — `lor`. RSS
+linux.org.ru кладёт в описание **только первую** картинку поста, а сам пост
+может состоять из нескольких скриншотов, поэтому экстрактор ходит на
+страницу поста и достаёт все слайды галереи. Разбор страницы кешируется по
+`guid` поста, так что за steady-state (посты не меняются после публикации)
+дополнительных запросов не происходит: один запрос на новый пост, а не на
+каждый элемент фида на каждом цикле. Страница грузится только для постов
+галереи и только если в фиде уже что-то нашлось — при сбое страницы пост
+уходит с тем, что есть, и не теряется.
+
+Тот же приём у `pingvinus`, только там в RSS описание у скриншотов
+**вообще пустое** — и картинка, и текст живут исключительно на странице
+поста. Дополнительно у экстрактора есть `extractFromUrl()` (нужен resend'у
+постов, давно выпавших из окна фида) и `extractTextFromUrl()` (нужен как
+fallback, когда AI-комментарий получить не удалось).
+
+Два новых поля в `sources.yml` делают настройку источника декларативной:
+
+- `includePattern` — regexp по ссылке на пост. Один фид часто содержит все
+  рубрики сразу, и без фильтра в «скриншоты» попадали бы новости. Фильтр
+  применяется **до** экстракции, поэтому отброшенная запись не стоит ни
+  одного HTTP-запроса к странице.
+- `fallbackTextLimit` — длина текста автора в сообщении, когда AI не
+  ответил. Текст укорачивается по границе слова (`truncateText`): обрыв на
+  полуслове («...рабочий сто») выглядит небрежно и теряет смысл.
 
 Остальной конвейер (дедупликация в SQLite, рендер шаблона, отправка в VK,
 backoff, админ-команды) ничего не знает про конкретные сайты/модели и не
 меняется.
+
+### Направление зависимостей
+
+```
+core/  ←  sources/  ←  pipeline/, enrich/, config/, db/, vk/, templates/
+```
+
+`core/` — контракты и общая механика, и он **не импортирует ничего за свои
+пределы** (кроме внешних npm-пакетов). Поэтому новый тип источника не может
+случайно затянуть в ядро логику конкретного сайта, а `SourceConfig` попадает
+в реестр адаптеров как параметр типа, а не как импорт из `config/`.
+
+`src/test/architecture.test.ts` проверяет эти инварианты — если новый модуль
+нарушит направление зависимостей, тест упадёт, а не ревью.
 
 ## Возможности
 
@@ -125,6 +175,7 @@ OWNER_ID=281457599
 
 DEFAULT_POLL_INTERVAL_MS=60000
 DEFAULT_REQUEST_TIMEOUT_MS=30000
+USER_AGENT=VK-Feed-Bot/2.0
 LOG_LEVEL=info
 
 OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY
@@ -132,7 +183,7 @@ OPENROUTER_MODEL=z-ai/glm-5.2:free
 OPENROUTER_MODEL_NAME=GLM 5.2
 OPENROUTER_PROMPT_FILE=templates/ai_comment.txt
 OPENROUTER_TIMEOUT_MS=30000
-OPENROUTER_MAX_TOKENS=300
+OPENROUTER_MAX_TOKENS=700
 
 IMAGE_DOWNLOAD_TIMEOUT_MS=60000
 VK_UPLOAD_TIMEOUT_MS=90000
@@ -146,15 +197,35 @@ VK_UPLOAD_TIMEOUT_MS=90000
 | `OWNER_ID` | VK ID владельца |
 | `DEFAULT_POLL_INTERVAL_MS` | интервал опроса, если источник не задал свой |
 | `DEFAULT_REQUEST_TIMEOUT_MS` | таймаут запроса фида, если источник не задал свой |
+| `USER_AGENT` | User-Agent для запросов фидов **и** для скачивания картинок |
+| `LOG_LEVEL` | уровень логов: `debug`, `info`, `warn`, `error` |
 | `OPENROUTER_API_KEY` | ключ OpenRouter (нужен, если хотя бы один источник использует `enrich: openrouter`) |
 | `OPENROUTER_MODEL` / `OPENROUTER_MODEL_NAME` | модель по умолчанию и её имя для сообщений |
 | `OPENROUTER_PROMPT_FILE` | промпт по умолчанию (источник может задать свой `promptPath`) |
+| `OPENROUTER_TIMEOUT_MS` | таймаут запроса к OpenRouter |
+| `OPENROUTER_MAX_TOKENS` | лимит токенов в ответе модели (по умолчанию `700`) |
 | `IMAGE_DOWNLOAD_TIMEOUT_MS` | таймаут скачивания изображения ботом |
 | `VK_UPLOAD_TIMEOUT_MS` | таймаут загрузки изображения в VK |
 | `DATABASE_PATH` | путь к SQLite (по умолчанию `data/bot.db`) |
 | `SOURCES_FILE` | путь к списку источников (по умолчанию `config/sources.yml`) |
 
 > `.env` содержит секреты и не должен попадать в Git.
+
+> **Нужно ли пересобирать проект после правки `.env`? Нет.**
+> `npm run build` — это просто `tsc`, то есть компиляция TypeScript в
+> JavaScript. Бандлера и плагинов подстановки (`define`, `dotenv-webpack`) в
+> проекте нет, поэтому значения из `.env` в `dist/` не попадают и не
+> запекаются. Файл читается в рантайме (`import 'dotenv/config'` →
+> `process.env`) ровно один раз — при старте процесса. Достаточно
+> `pm2 restart`.
+>
+> То же касается `config/sources.yml`: он тоже читается только при старте,
+> поэтому новый источник без рестарта не подхватится. Исключение —
+> AI-промпт: он перечитывается лениво, но кешируется, так что надёжнее
+> тоже рестартнуть (или `/ai reload`).
+>
+> Проверить, что секрет случайно не утёк в сборку:
+> `grep -r "значение_переменной" dist/` — совпадений быть не должно.
 
 ### 2.2 `config/sources.yml` — источники
 
@@ -177,10 +248,12 @@ OPENROUTER_MODEL_NAME=Название модели
 После изменения промпта перезапуск не нужен: `/ai reload`.
 Проверка текущей конфигурации: `/ai status`.
 
-## 4. Сборка и запуск
+## 4. Сборка, проверка и запуск
 
 ```
-npm run build
+npm run build       # сборка в dist/ (tsc)
+npm run typecheck   # проверка типов, включая тесты
+npm test            # юнит-тесты (встроенный node:test, без зависимостей)
 npm start
 ```
 
@@ -283,19 +356,25 @@ The operation was aborted
 
 ```
 src/
-├── core/                     # контракты (не знают о конкретных сайтах/моделях)
+├── core/                     # контракты и общая механика; ни одного импорта наружу
 │   ├── types.ts               # FeedEntry, TemplateData, Admin
+│   ├── registry.ts            # базовый класс реестра стратегий
+│   ├── atom-item.ts           # форма элемента фида (Atom/RSS/RDF)
+│   ├── text-utils.ts          # нормализация HTML/текста, fetchText
 │   ├── source-adapter.ts      # интерфейс SourceAdapter
 │   ├── source-adapter-registry.ts
 │   ├── image-extractor.ts     # интерфейс ImageExtractor + реестр
+│   ├── description-extractor.ts # интерфейс DescriptionExtractor + реестр
+│   ├── page-based-extractor.ts # база для экстракторов, ходящих на страницу поста
+│   ├── html-blocks.ts         # поиск блоков в HTML по тегу/классу
+│   ├── bounded-cache.ts       # кеш ограниченного размера
 │   └── enricher.ts            # интерфейс Enricher + реестр
 │
-├── sources/
-│   ├── atom-item.ts            # разбор Atom/RSS полей
-│   ├── text-utils.ts           # нормализация HTML/текста, fetchText
+├── sources/                  # конкретные адаптеры; зависит только от core/
 │   ├── rss-source-adapter.ts   # универсальный RSS/Atom SourceAdapter
 │   └── image-extractors/
-│       └── lor-image-extractor.ts   # специфика linux.org.ru
+│       ├── lor-image-extractor.ts      # специфика linux.org.ru
+│       └── pingvinus-image-extractor.ts # специфика pingvinus.ru
 │
 ├── enrich/
 │   └── openrouter-enricher.ts  # AI-обогащение через OpenRouter
@@ -311,7 +390,7 @@ src/
 │   ├── app-config.ts           # итоговый AppConfig
 │   └── index.ts                # склейка env + sources.yml
 │
-├── registries.ts               # точка регистрации всех стратегий
+├── registries.ts               # точка регистрации и валидации всех стратегий
 │
 ├── db/database.ts              # SQLite (дедупликация, админы, настройки)
 ├── vk/client.ts                # VK API клиент
@@ -320,6 +399,8 @@ src/
 ├── commands/handler.ts         # команды администраторов
 ├── logger/logger.ts            # логирование в VK
 ├── utils/error-backoff.ts      # нарастающая задержка при повторных ошибках
+├── utils/to-message.ts         # единое приведение ошибки к строке
+├── test/                       # юнит-тесты + инварианты слоёв (node:test)
 └── index.ts                    # composition root
 
 config/

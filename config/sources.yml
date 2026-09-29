@@ -2,9 +2,11 @@
 #
 # Добавить источник  — добавить блок в этот список.
 # Удалить источник    — удалить блок (или поставить enabled: false).
-# Настроить источник  — поменять поля блока. Перезапуск бота не нужен
-#                        для url/интервалов после команды /source reload
-#                        (перечитывает файл при следующем цикле планировщика).
+# Настроить источник  — поменять поля блока и перезапустить бота.
+#
+# ВНИМАНИЕ: этот файл читается ТОЛЬКО при старте. Команды /template reload
+# и /ai reload перечитывают шаблоны и AI-промпт, но не sources.yml.
+# Для правки url/интервалов/enrich нужен рестарт (pm2 restart vk-feed-bot).
 #
 # Поля:
 #   id               уникальный идентификатор (a-z0-9-_), используется в БД и командах
@@ -13,12 +15,27 @@
 #   enabled          включён ли источник
 #   url              URL RSS/Atom фида
 #   requireImages    true — посты без картинок пропускаются (напр. "скриншотные" источники)
-#   imageExtractor   "none" | "lor" | ваш собственный ключ (см. src/registries.ts)
+#   imageExtractor   "none" | "lor" | "pingvinus" | ваш собственный ключ (см. src/registries.ts)
+#                    ключ выбирает сразу две стратегии сайта: разбор URL картинок
+#                    И вырезание блоков картинок/тегов из описания
+#   includePattern   (опционально) regexp по ссылке на пост. В источник попадут
+#                    только совпавшие записи — удобно, когда один фид на все
+#                    рубрики, напр. "^https://pingvinus\.ru/gallery/"
+#   fallbackTextLimit (опционально) длина текста автора в сообщении, когда
+#                    AI-комментарий получить не удалось. Текст укорачивается
+#                    по границе слова, без разрезания последнего
 #   enrich           "none" | "openrouter" | ваш собственный ключ
 #   template         путь к YAML-шаблону сообщения
 #   pollIntervalMs   интервал опроса (опционально, иначе DEFAULT_POLL_INTERVAL_MS из .env)
 #   requestTimeoutMs таймаут запроса фида (опционально, иначе DEFAULT_REQUEST_TIMEOUT_MS)
 #   promptPath       свой промпт для enrich: openrouter (опционально, иначе глобальный)
+#
+#   "lor" дополнительно догружает страницу поста, потому что RSS
+#   linux.org.ru содержит только первую картинку галереи, а скриншотов
+#   в посте обычно несколько. Результат разбора кешируется по id поста.
+#
+#   "pingvinus" тоже ходит на страницу поста: в его RSS описание у
+#   скриншотов пустое, а картинка и текст живут только на странице.
 
 sources:
   - id: forum
@@ -35,8 +52,24 @@ sources:
     name: LOR Screenshots
     type: rss
     enabled: true
-    url: https://www.linux.org.ru/section-rss.jsp?section=3&group=19393
+    url: https://www.linux.org.ru/section-rss.jsp?section=3
     requireImages: true
     imageExtractor: lor
+    # Если AI не ответил — короткая выжимка текста автора по границе слова.
+    fallbackTextLimit: 200
+    enrich: openrouter
+    template: templates/screenshot_post.yml
+
+  - id: pingvinus
+    name: Pingvinus Screenshots
+    type: rss
+    enabled: true
+    url: https://pingvinus.ru/rss.xml
+    requireImages: true
+    imageExtractor: pingvinus
+    # В фиде смешаны новости, заметки и скриншоты — берём только скриншоты.
+    includePattern: '^https://pingvinus\.ru/gallery/'
+    # Если AI не ответил — короткая выжимка текста автора по границе слова.
+    fallbackTextLimit: 200
     enrich: openrouter
     template: templates/screenshot_post.yml

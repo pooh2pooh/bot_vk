@@ -1,4 +1,5 @@
 import type { FeedEntry } from './types.js';
+import { Registry } from './registry.js';
 
 export interface EnrichResult {
   entry: FeedEntry;
@@ -22,26 +23,15 @@ export class NoopEnricher implements Enricher {
   }
 }
 
-export class EnricherRegistry {
-  private readonly enrichers = new Map<string, Enricher>();
+export class EnricherRegistry extends Registry<Enricher> {
+  protected readonly kind = 'enricher';
 
   constructor() {
+    super();
     this.register('none', new NoopEnricher());
   }
 
-  register(key: string, enricher: Enricher): void {
-    this.enrichers.set(key, enricher);
-  }
-
   resolve(key: string | undefined): Enricher {
-    const enricher = this.enrichers.get(key ?? 'none');
-
-    if (!enricher) {
-      throw new Error(
-        `Unknown enricher "${key}". Registered: ${[...this.enrichers.keys()].join(', ')}`
-      );
-    }
-
-    return enricher;
+    return this.require(key ?? 'none');
   }
 }

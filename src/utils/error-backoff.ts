@@ -1,11 +1,13 @@
+import { toMessage } from './to-message.js';
+
 /**
  * Последовательный backoff для одинаковых ошибок.
  *
  * 1-я ошибка  ->  3 мин
  * 2-я ошибка  ->  6 мин
- * 3-я ошибка  -> 12 мин
- * 4-я ошибка  -> 40 мин
- * 5+ ошибок   -> 60 мин
+ * 3-я ошибка  ->  12 мин
+ * 4-я ошибка  ->  40 мин
+ * 5+ ошибок   ->  60 мин
  *
  * После успешной попытки состояние полностью сбрасывается.
  */
@@ -37,7 +39,7 @@ export class ErrorBackoff {
   private state: FailureState | null = null;
 
   fail(error: unknown): BackoffFailureResult {
-    const message = this.getMessage(error);
+    const message = toMessage(error);
 
     if (this.state?.error === message) {
       this.state.count++;
@@ -50,7 +52,7 @@ export class ErrorBackoff {
 
     const count = this.state.count;
     const delayMs =
-      BACKOFF_MS[Math.min(count, BACKOFF_MS.length) - 1];
+      BACKOFF_MS[Math.min(count, BACKOFF_MS.length) - 1] ?? BACKOFF_MS[0];
 
     return {
       count,
@@ -69,11 +71,5 @@ export class ErrorBackoff {
       hadFailures: count > 0,
       count
     };
-  }
-
-  private getMessage(error: unknown): string {
-    return error instanceof Error
-      ? error.message.trim()
-      : String(error).trim();
   }
 }

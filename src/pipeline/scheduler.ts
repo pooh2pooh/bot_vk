@@ -1,5 +1,6 @@
 import type { Logger } from '../logger/logger.js';
 import { ErrorBackoff } from '../utils/error-backoff.js';
+import { toMessage } from '../utils/to-message.js';
 import type { SourcePipeline } from './source-pipeline.js';
 
 export interface ScheduledSource {
@@ -49,10 +50,6 @@ export class Scheduler {
     }
   }
 
-  isEnabled(sourceId: string): boolean {
-    return this.sources.get(sourceId)?.enabled ?? false;
-  }
-
   list(): Array<{ sourceId: string; sourceName: string; enabled: boolean }> {
     return [...this.sources.values()].map(source => ({
       sourceId: source.pipeline.sourceId,
@@ -94,7 +91,7 @@ export class Scheduler {
       }
     } catch (error) {
       const failure = source.backoff.fail(error);
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toMessage(error);
 
       // Одинаковые последовательные ошибки не спамят лог и админ-чат.
       if (failure.shouldLog) {

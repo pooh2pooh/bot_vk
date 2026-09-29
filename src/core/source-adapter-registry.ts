@@ -1,7 +1,21 @@
-import type { SourceConfig } from '../config/source-config.js';
+import { Registry } from './registry.js';
 import type { SourceAdapter } from './source-adapter.js';
 
-export type SourceAdapterFactory = (config: SourceConfig) => SourceAdapter;
+/**
+ * Минимальный контракт, который реестру нужно знать о конфиге источника.
+ *
+ * Реестр параметризован типом конфига (`SourceConfig` передаёт его
+ * registries.ts), поэтому core/ не зависит от слоя config/ — достаточно
+ * знать, где лежит ключ `type` и id для сообщения об ошибке.
+ */
+export interface SourceDescriptor {
+  /** Ключ адаптера в этом реестре. */
+  type: string;
+  /** Id источника — нужен только для понятного сообщения об ошибке. */
+  id: string;
+}
+
+export type SourceAdapterFactory<TConfig> = (config: TConfig) => SourceAdapter;
 
 /**
  * Реестр типов источников. Чтобы добавить принципиально новый тип
@@ -10,23 +24,15 @@ export type SourceAdapterFactory = (config: SourceConfig) => SourceAdapter;
  * под новым `type`. Остальной конвейер (дедупликация, шаблоны,
  * отправка, backoff, команды) не меняется.
  */
-export class SourceAdapterRegistry {
-  private readonly factories = new Map<string, SourceAdapterFactory>();
+export class SourceAdapterRegistry<TConfig extends SourceDescriptor>
+  extends Registry<SourceAdapterFactory<TConfig>>
+{
+  protected readonly kind = 'source type';
 
-  register(type: string, factory: SourceAdapterFactory): void {
-    this.factories.set(type, factory);
-  }
-
-  create(config: SourceConfig): SourceAdapter {
-    const factory = this.factories.get(config.type);
-
-    if (!factory) {
-      throw new Error(
-        `Unknown source type "${config.type}" for source "${config.id}". ` +
-          `Registered: ${[...this.factories.keys()].join(', ')}`
-      );
-    }
-
-    return factory(config);
+  create(config: TConfig): SourceAdapter {
+    return this.require(
+      config.type,
+      `for source "${config.id}"`
+    )(config);
   }
 }

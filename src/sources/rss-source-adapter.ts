@@ -1,17 +1,20 @@
 import Parser from 'rss-parser';
 
+import type { DescriptionExtractor } from '../core/description-extractor.js';
 import type { ImageExtractor } from '../core/image-extractor.js';
-import type { SourceAdapter } from '../core/source-adapter.js';
+import type {
+  FetchOptions,
+  SourceAdapter
+} from '../core/source-adapter.js';
 import type { FeedEntry } from '../core/types.js';
-import type { AtomItem } from './atom-item.js';
+import type { AtomItem } from '../core/atom-item.js';
 import {
   fetchText,
   getAuthor,
-  itemHtmlContent,
   itemPublished,
   itemUpdated,
   normalizeText
-} from './text-utils.js';
+} from '../core/text-utils.js';
 
 export interface RssSourceAdapterOptions {
   sourceId: string;
@@ -22,11 +25,18 @@ export interface RssSourceAdapterOptions {
   /** Если true — записи без картинок отбрасываются (напр. "скриншотные" источники). */
   requireImages: boolean;
   /**
-   * Необязательный кастомный экстрактор текста описания (по умолчанию —
-   * обычная нормализация HTML). Нужен источникам вроде LOR, где из описания
-   * дополнительно вырезаются блоки картинок/тегов.
+   * Экстрактор текста описания. Реализацию по умолчанию (обычная нормализация
+   * HTML) даёт DescriptionExtractorRegistry под ключом `none`, а источники
+   * вроде LOR подключают свою, которая дополнительно вырезает из описания
+   * блоки картинок и теги.
    */
-  extractDescription?: (item: AtomItem) => string;
+  extractDescription: DescriptionExtractor;
+  /**
+   * Если задан, в источник попадают только записи, чей link совпал с этим
+   * шаблоном. Нужен сайтам, у которых один фид на все рубрики: чтобы в
+   * «скриншоты» не попадали новости, а в источник — заметки.
+   */
+  includePattern?: RegExp;
 }
 
 /**
@@ -44,7 +54,7 @@ export class RssSourceAdapter implements SourceAdapter {
     this.parser = new Parser();
   }
 
-  async fetch(): Promise<FeedEntry[]> {
+  async fetch(options: FetchOptions = {}): Promise<FeedEntry[]> {
     const xml = await fetchText(
       this.options.url,
       this.options.timeoutMs,
@@ -55,7 +65,17 @@ export class RssSourceAdapter implements SourceAdapter {
     const entries: FeedEntry[] = [];
 
     for (const item of feed.items as AtomItem[]) {
-      const entry = this.toFeedEntry(item);
+      /*
+       * Оба фильтра применяются ДО экстракции картинок: отброшенная запись
+       * не должна ни ходить на страницу поста, ни платить за это запросом.
+       * Для pingvinus это важно — в фиде смешаны новости, заметки и
+       * скриншоты, и страницы надо открывать только у последних.
+       */
+      if (this.options.includePattern && !this.matchesInclude(item)) {
+        continue;
+      }
+
+      const entry = await this.toFeedEntry(item, options.skipIds);
 
       if (entry) {
         entries.push(entry);
@@ -65,7 +85,62 @@ export class RssSourceAdapter implements SourceAdapter {
     return entries;
   }
 
-  private toFeedEntry(item: AtomItem): FeedEntry | null {
+  private matchesInclude(item: AtomItem): boolean {
+    const pattern = this.options.includePattern;
+
+    if (!pattern) {
+      return true;
+    }
+
+    // guid у pingvinus — "5532 at https://pingvinus.ru", это не ссылка на
+    // пост, поэтому ориентируемся на link, а guid берём лишь как запасной
+    // вариант для фидов без <link>.
+    const candidates = [item.link, item.guid];
+
+    return candidates.some(
+      value => typeof value === 'string' && pattern.test(value.trim())
+    );
+  }
+
+  /**
+   * Переизвлекает картинки конкретной записи.
+   *
+   * Сначала пробуем свежий фид — это самый дешёвый путь. Но записи в базе
+   * бывают старше окна фида (RSS отдаёт только последние ~30 постов), и для
+   * resend такой пост в фиде просто отсутствует. Поэтому, если в фиде его не
+   * нашлось, идём на страницу поста напрямую: там картинки лежат всегда.
+   *
+   * Если не сработало ни то, ни другое — null, и вызывающий код остаётся на
+   * сохранённом значении, а не отправляет пост без картинок.
+   */
+  async reextractImages(id: string, link?: string): Promise<string[] | null> {
+    // Без skipIds: цель — НАЙТИ запись в фиде, а не отбросить обработанные.
+    const entries = await this.fetch();
+    const match = entries.find(entry => entry.id === id);
+
+    if (match) {
+      return match.imageUrls;
+    }
+
+    if (!link) {
+      return null;
+    }
+
+    const extractFromUrl = this.options.imageExtractor.extractFromUrl;
+
+    if (!extractFromUrl) {
+      return null;
+    }
+
+    const fromPage = await extractFromUrl.call(this.options.imageExtractor, link);
+
+    return fromPage.length > 0 ? fromPage : null;
+  }
+
+  private async toFeedEntry(
+    item: AtomItem,
+    skipIds?: ReadonlySet<string>
+  ): Promise<FeedEntry | null> {
     // Atom использует <id>, RSS/RDF (как LOR) — <guid>.
     const rawId = item.guid?.trim() ?? item.id?.trim();
     const title = item.title?.trim();
@@ -75,25 +150,25 @@ export class RssSourceAdapter implements SourceAdapter {
       return null;
     }
 
-    const imageUrls = this.options.imageExtractor.extract(item);
+    const id = `${this.sourceId}:${rawId}`;
+
+    if (skipIds?.has(id)) {
+      return null;
+    }
+
+    const imageUrls = await this.options.imageExtractor.extract(item);
 
     if (this.options.requireImages && imageUrls.length === 0) {
       return null;
     }
 
-    const content = this.options.extractDescription
-      ? normalizeText(this.options.extractDescription(item))
-      : normalizeText(itemHtmlContent(item) || item.description || '');
-
-    if (this.options.requireImages && !content && imageUrls.length === 0) {
-      return null;
-    }
+    const content = normalizeText(this.options.extractDescription(item));
 
     const published = itemPublished(item);
     const updated = itemUpdated(item, published);
 
     return {
-      id: `${this.sourceId}:${rawId}`,
+      id,
       sourceId: this.sourceId,
       title,
       link,

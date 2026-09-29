@@ -17,6 +17,8 @@ interface RawSource {
   pollIntervalMs?: unknown;
   requestTimeoutMs?: unknown;
   promptPath?: unknown;
+  includePattern?: unknown;
+  fallbackTextLimit?: unknown;
 }
 
 const ID_PATTERN = /^[a-z0-9_-]+$/;
@@ -74,6 +76,38 @@ function parseOne(
     return null;
   }
 
+  if (raw.includePattern !== undefined) {
+    if (typeof raw.includePattern !== 'string' || !raw.includePattern) {
+      fail(`${path}.includePattern`, issues, 'must be a non-empty string');
+      return null;
+    }
+
+    // Плохой regexp тихо отсёк бы весь фид, а пользователь увидел бы просто
+    // пустой источник. Ловим это на старте, вместе с остальным конфигом.
+    try {
+      new RegExp(raw.includePattern);
+    } catch (error) {
+      fail(
+        `${path}.includePattern`,
+        issues,
+        `must be a valid regular expression (${
+          error instanceof Error ? error.message : String(error)
+        })`
+      );
+      return null;
+    }
+  }
+
+  if (
+    raw.fallbackTextLimit !== undefined &&
+    (typeof raw.fallbackTextLimit !== 'number' ||
+      !Number.isFinite(raw.fallbackTextLimit) ||
+      raw.fallbackTextLimit < 0)
+  ) {
+    fail(`${path}.fallbackTextLimit`, issues, 'must be a non-negative number');
+    return null;
+  }
+
   return {
     id: raw.id,
     name: typeof raw.name === 'string' && raw.name ? raw.name : raw.id,
@@ -90,7 +124,9 @@ function parseOne(
     template: raw.template,
     pollIntervalMs: raw.pollIntervalMs as number | undefined,
     requestTimeoutMs: raw.requestTimeoutMs as number | undefined,
-    promptPath: raw.promptPath as string | undefined
+    promptPath: raw.promptPath as string | undefined,
+    includePattern: raw.includePattern as string | undefined,
+    fallbackTextLimit: raw.fallbackTextLimit as number | undefined
   };
 }
 

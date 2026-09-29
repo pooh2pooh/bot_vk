@@ -6,6 +6,7 @@ import type { Logger } from '../logger/logger.js';
 import type { Scheduler } from '../pipeline/scheduler.js';
 import type { SourcePipeline } from '../pipeline/source-pipeline.js';
 import type { TemplateManager } from '../templates/manager.js';
+import { toMessage } from '../utils/to-message.js';
 
 export interface CommandHandlerOptions {
   db: BotDatabase;
@@ -65,7 +66,7 @@ export class CommandHandler {
           await ctx.send('Неизвестная команда.\n\nИспользуй /help');
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toMessage(error);
 
       this.opts.logger.error(
         `Command ${command} failed for ${senderId}: ${message}`
@@ -181,20 +182,20 @@ export class CommandHandler {
       }
 
       case 'enable': {
-        this.getPipeline(id);
-        this.opts.scheduler.setEnabled(id, true);
-        this.opts.db.setSourceEnabledOverride(id, true);
-        await ctx.send(`✅ Источник "${id}" включён.`);
-        this.opts.logger.info(`Source ${id} enabled by ${ctx.senderId}.`);
+        const { sourceId } = this.getPipeline(id);
+        this.opts.scheduler.setEnabled(sourceId, true);
+        this.opts.db.setSourceEnabledOverride(sourceId, true);
+        await ctx.send(`✅ Источник "${sourceId}" включён.`);
+        this.opts.logger.info(`Source ${sourceId} enabled by ${ctx.senderId}.`);
         return;
       }
 
       case 'disable': {
-        this.getPipeline(id);
-        this.opts.scheduler.setEnabled(id, false);
-        this.opts.db.setSourceEnabledOverride(id, false);
-        await ctx.send(`✅ Источник "${id}" выключен.`);
-        this.opts.logger.info(`Source ${id} disabled by ${ctx.senderId}.`);
+        const { sourceId } = this.getPipeline(id);
+        this.opts.scheduler.setEnabled(sourceId, false);
+        this.opts.db.setSourceEnabledOverride(sourceId, false);
+        await ctx.send(`✅ Источник "${sourceId}" выключен.`);
+        this.opts.logger.info(`Source ${sourceId} disabled by ${ctx.senderId}.`);
         return;
       }
 
