@@ -12,7 +12,7 @@
  */
 
 /** Позиция открывающего тега с указанным именем, либо -1. */
-export function findTag(html: string, name: string): number {
+function findTag(html: string, name: string): number {
   const match = new RegExp(`<${name}\\b[^>]*>`, 'i').exec(html);
   return match ? match.index : -1;
 }

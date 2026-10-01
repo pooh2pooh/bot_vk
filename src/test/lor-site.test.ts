@@ -1,27 +1,44 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import type { AtomItem } from '../core/atom-item.js';
-import {
-  LorImageExtractor,
-  extractLorDescription
-} from '../sources/image-extractors/lor-image-extractor.js';
+import type { FeedItem } from '../core/feed-item.js';
+import { LorSite } from '../sources/sites/lor.js';
+import type { PageContext, PageLoader } from '../core/page-based-site.js';
+
+/** Контекст источника по умолчанию; интересует только `pageCacheSize` и потолок. */
+const CTX: PageContext = {
+  timeoutMs: 30_000,
+  userAgent: 'test',
+  pageCacheSize: 500,
+  maxParallelPages: 4
+};
+
+/** Собирает стратегию с подменённой загрузкой страницы. */
+function lorSite(loadPage: PageLoader, pageCacheSize = CTX.pageCacheSize): LorSite {
+  return new LorSite({ ...CTX, pageCacheSize }, loadPage);
+}
+
+/** То же, но с заданным размером кеша страниц. */
+function lorSiteWithCache(pageCacheSize: number, loadPage: PageLoader): LorSite {
+  return lorSite(loadPage, pageCacheSize);
+}
+
+/** Загрузчик, который падает: вызывающий сам решает, что делать с ошибкой. */
+function failing(url: string): never {
+  throw new Error(`Тест не должен ходить в сеть, но попытался: ${url}`);
+}
 
 const POST_URL = 'https://www.linux.org.ru/gallery/screenshots/18389326';
 /** Экземпляр без доступа к сети: тесты ниже проверяют только разбор разметки. */
-const extractor = new LorImageExtractor({
-  fetchPage: async url => {
-    throw new Error(`Тест не должен ходить в сеть, но попытался: ${url}`);
-  }
-});
+const site = lorSite(failing);
 
-function item(content: string): AtomItem {
-  return { description: content };
+function item(content: string): FeedItem {
+  return { content };
 }
 
-describe('LorImageExtractor.extract', () => {
+describe('LorSite.images', () => {
   it('находит обычные <img src>', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item('<img src="https://www.linux.org.ru/images/gallery/500px.jpg">')
     );
 
@@ -31,7 +48,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('из srcset берёт самый широкий вариант', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item(
         '<img srcset="https://www.linux.org.ru/images/g/500px.jpg 500w, ' +
           'https://www.linux.org.ru/images/g/1000px.jpg 1000w, ' +
@@ -43,7 +60,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('предпочитает original.png обычным 500px.jpg', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item(
         '<img src="https://www.linux.org.ru/images/g/500px.jpg">' +
           '<a href="https://www.linux.org.ru/images/g/original.png">оригинал</a>'
@@ -54,7 +71,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('original-like имена (original/full/master) приоритетнее ширины', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item(
         '<img src="https://www.linux.org.ru/images/g/2000px.jpg">' +
           '<img src="https://www.linux.org.ru/images/g/master.jpg">'
@@ -65,7 +82,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('схлопывает варианты одной картинки в один URL', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item(
         '<img src="https://www.linux.org.ru/images/g/500px.jpg">' +
           '<img src="https://www.linux.org.ru/images/g/1000px.jpg">' +
@@ -77,7 +94,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('разные директории остаются отдельными и идут в порядке появления', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item(
         '<img src="https://www.linux.org.ru/images/b/100px.jpg">' +
           '<img src="https://www.linux.org.ru/images/a/200px.jpg">'
@@ -91,13 +108,13 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('резолвит относительные пути в абсолютные', async () => {
-    const urls = await extractor.extract(item('<img src="/images/g/800px.jpg">'));
+    const urls = await site.images(item('<img src="/images/g/800px.jpg">'));
 
     assert.deepEqual(urls, ['https://www.linux.org.ru/images/g/800px.jpg']);
   });
 
   it('ловит URL картинки, оставленный обычным текстом', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item('<p>вот скрин /images/g/700px.jpg — смотрите</p>')
     );
 
@@ -105,7 +122,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('ловит абсолютный URL картинки из текста', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item('<p>https://www.linux.org.ru/photos/a/900px.jpg</p>')
     );
 
@@ -113,7 +130,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('игнорирует чужие домены в тегах', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item(
         '<img src="https://evil.example.com/images/500px.jpg">' +
           '<a href="https://cdn.other.org/photos/x.png">x</a>'
@@ -124,7 +141,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('не переписывает чужой URL из текста на linux.org.ru', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item('<p>смотри https://evil.example.com/images/500px.jpg</p>')
     );
 
@@ -132,7 +149,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('берёт LOR-URL из текста, но не хвост чужого URL', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item(
         '<p>https://www.linux.org.ru/images/g/700px.jpg ' +
           'и https://evil.example.com/images/900px.jpg</p>'
@@ -143,7 +160,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('игнорирует не-картинки и пути вне /images/ и /photos/', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item(
         '<img src="https://www.linux.org.ru/images/readme.txt">' +
           '<img src="https://www.linux.org.ru/galleries/a.jpg">'
@@ -154,7 +171,7 @@ describe('LorImageExtractor.extract', () => {
   });
 
   it('декодирует HTML-сущности в query-параметрах', async () => {
-    const urls = await extractor.extract(
+    const urls = await site.images(
       item('<img src="https://www.linux.org.ru/images/g/500px.jpg?a=1&amp;b=2">')
     );
 
@@ -165,7 +182,7 @@ describe('LorImageExtractor.extract', () => {
 
   it('пустая разметка даёт пустой результат', async () => {
     assert.deepEqual(
-      await extractor.extract(item('<p>просто текст без картинок</p>')),
+      await site.images(item('<p>просто текст без картинок</p>')),
       []
     );
   });
@@ -210,20 +227,19 @@ const POST_PAGE = [
   '</div></body></html>'
 ].join('\n');
 
-function galleryItem(description: string, link = POST_URL): AtomItem {
-  return { description, link, guid: link };
+function galleryItem(description: string, link = POST_URL): FeedItem {
+  return { content: description, link, id: link };
 }
 
-function extractorWithPage(
+function siteWithPage(
   page: string,
   options: { failWith?: Error } = {}
-): { extractor: LorImageExtractor; calls: string[] } {
+): { site: LorSite; calls: string[] } {
   const calls: string[] = [];
 
   return {
     calls,
-    extractor: new LorImageExtractor({
-      fetchPage: async url => {
+    site: lorSite(async url => {
         calls.push(url);
 
         if (options.failWith) {
@@ -231,16 +247,15 @@ function extractorWithPage(
         }
 
         return page;
-      }
-    })
+        })
   };
 }
 
-describe('LorImageExtractor: догрузка страницы поста', () => {
+describe('LorSite: догрузка страницы поста', () => {
   it('забирает ВСЕ скриншоты поста, а не только первый из фида', async () => {
-    const { extractor: sut, calls } = extractorWithPage(POST_PAGE);
+    const { site: sut, calls } = siteWithPage(POST_PAGE);
 
-    const urls = await sut.extract(galleryItem(FEED_DESCRIPTION));
+    const urls = await sut.images(galleryItem(FEED_DESCRIPTION));
 
     assert.deepEqual(urls, [
       'https://www.linux.org.ru/images/24116/original.png',
@@ -252,20 +267,20 @@ describe('LorImageExtractor: догрузка страницы поста', () =
   });
 
   it('не тащит картинки вне галереи со страницы', async () => {
-    const { extractor: sut } = extractorWithPage(POST_PAGE);
-    const urls = await sut.extract(galleryItem(FEED_DESCRIPTION));
+    const { site: sut } = siteWithPage(POST_PAGE);
+    const urls = await sut.images(galleryItem(FEED_DESCRIPTION));
 
     assert.equal(urls.some(url => url.includes('99999')), false);
     assert.equal(urls.some(url => url.includes('88888')), false);
   });
 
   it('кеширует разбор: повторный poll страницу не грузит', async () => {
-    const { extractor: sut, calls } = extractorWithPage(POST_PAGE);
+    const { site: sut, calls } = siteWithPage(POST_PAGE);
     const entry = galleryItem(FEED_DESCRIPTION);
 
-    const first = await sut.extract(entry);
-    const second = await sut.extract(entry);
-    const third = await sut.extract(entry);
+    const first = await sut.images(entry);
+    const second = await sut.images(entry);
+    const third = await sut.images(entry);
 
     assert.deepEqual(first, second);
     assert.deepEqual(second, third);
@@ -273,12 +288,12 @@ describe('LorImageExtractor: догрузка страницы поста', () =
   });
 
   it('разные посты кешируются независимо', async () => {
-    const { extractor: sut, calls } = extractorWithPage(POST_PAGE);
+    const { site: sut, calls } = siteWithPage(POST_PAGE);
 
-    await sut.extract(
+    await sut.images(
       galleryItem(FEED_DESCRIPTION, 'https://www.linux.org.ru/gallery/screenshots/1')
     );
-    await sut.extract(
+    await sut.images(
       galleryItem(FEED_DESCRIPTION, 'https://www.linux.org.ru/gallery/screenshots/2')
     );
 
@@ -287,13 +302,10 @@ describe('LorImageExtractor: догрузка страницы поста', () =
 
   it('вытесняет самый старый пост при переполнении кеша', async () => {
     const calls: string[] = [];
-    const bounded = new LorImageExtractor({
-      pageCacheSize: 1,
-      fetchPage: async url => {
+    const bounded = lorSiteWithCache(1, async url => {
         calls.push(url);
         return POST_PAGE;
-      }
-    });
+        });
 
     const first = galleryItem(
       FEED_DESCRIPTION,
@@ -304,15 +316,15 @@ describe('LorImageExtractor: догрузка страницы поста', () =
       'https://www.linux.org.ru/gallery/screenshots/2'
     );
 
-    await bounded.extract(first);
-    await bounded.extract(second);
+    await bounded.images(first);
+    await bounded.images(second);
     assert.equal(calls.length, 2, 'второй пост вытеснил первый из кеша');
 
     // Кеш на одну запись: после вставки first пост second уже вытеснен.
-    await bounded.extract(first);
+    await bounded.images(first);
     assert.equal(calls.length, 3, 'вытесненный пост грузится заново');
 
-    await bounded.extract(second);
+    await bounded.images(second);
     assert.equal(
       calls.length,
       4,
@@ -322,13 +334,10 @@ describe('LorImageExtractor: догрузка страницы поста', () =
 
   it('держит в кеше все посты, пока не упрётся в лимит', async () => {
     const calls: string[] = [];
-    const sut = new LorImageExtractor({
-      pageCacheSize: 2,
-      fetchPage: async url => {
+    const sut = lorSiteWithCache(2, async url => {
         calls.push(url);
         return POST_PAGE;
-      }
-    });
+        });
 
     const first = galleryItem(
       FEED_DESCRIPTION,
@@ -339,45 +348,45 @@ describe('LorImageExtractor: догрузка страницы поста', () =
       'https://www.linux.org.ru/gallery/screenshots/2'
     );
 
-    await sut.extract(first);
-    await sut.extract(second);
+    await sut.images(first);
+    await sut.images(second);
     assert.equal(calls.length, 2);
 
     // Оба в кеше — ни одного нового запроса.
-    await sut.extract(first);
-    await sut.extract(second);
+    await sut.images(first);
+    await sut.images(second);
     assert.equal(calls.length, 2, 'оба поста в кеше, запросов не добавилось');
   });
 
   it('при сбое страницы отдаёт то, что есть в фиде, и не падает', async () => {
-    const { extractor: sut } = extractorWithPage('', {
+    const { site: sut } = siteWithPage('', {
       failWith: new Error('HTTP 503')
     });
 
-    const urls = await sut.extract(galleryItem(FEED_DESCRIPTION));
+    const urls = await sut.images(galleryItem(FEED_DESCRIPTION));
 
     assert.deepEqual(urls, ['https://www.linux.org.ru/images/24116/original.png']);
   });
 
   it('если в фиде пусто и страница не пришла — пробрасывает ошибку на backoff', async () => {
-    const { extractor: sut } = extractorWithPage('', {
+    const { site: sut } = siteWithPage('', {
       failWith: new Error('HTTP 503')
     });
 
     await assert.rejects(
-      () => sut.extract(galleryItem('<p>без картинок</p>')),
+      () => sut.images(galleryItem('<p>без картинок</p>')),
       /HTTP 503/
     );
   });
 
   it('не ходит на страницу обычных тем форума', async () => {
-    const { extractor: sut, calls } = extractorWithPage(POST_PAGE);
+    const { site: sut, calls } = siteWithPage(POST_PAGE);
     const link = 'https://www.linux.org.ru/forum/talks/18389236';
 
-    const urls = await sut.extract({
+    const urls = await sut.images({
       description: '<img src="https://www.linux.org.ru/images/24116/1000px.jpg">',
       link,
-      guid: link
+      id: link
     });
 
     assert.deepEqual(urls, [
@@ -386,26 +395,11 @@ describe('LorImageExtractor: догрузка страницы поста', () =
     assert.deepEqual(calls, []);
   });
 
-  it('fetchPageImages: false оставляет только поведение фида', async () => {
-    const calls: string[] = [];
-    const disabled = new LorImageExtractor({
-      fetchPageImages: false,
-      fetchPage: async url => {
-        calls.push(url);
-        return POST_PAGE;
-      }
-    });
-
-    const urls = await disabled.extract(galleryItem(FEED_DESCRIPTION));
-
-    assert.deepEqual(urls, ['https://www.linux.org.ru/images/24116/original.png']);
-    assert.deepEqual(calls, []);
-  });
 
   it('дубликаты картинок из фида и страницы схлопываются', async () => {
-    const { extractor: sut } = extractorWithPage(POST_PAGE);
+    const { site: sut } = siteWithPage(POST_PAGE);
 
-    const urls = await sut.extract(galleryItem(FEED_DESCRIPTION));
+    const urls = await sut.images(galleryItem(FEED_DESCRIPTION));
 
     assert.equal(new Set(urls).size, urls.length);
   });
@@ -416,9 +410,9 @@ describe('LorImageExtractor: догрузка страницы поста', () =
       '<img src="https://www.linux.org.ru/images/24116/1000px.jpg">' +
       '<img src="https://www.linux.org.ru/images/24117/1000px.jpg">' +
       '</body></html>';
-    const { extractor: sut } = extractorWithPage(pageWithoutSlider);
+    const { site: sut } = siteWithPage(pageWithoutSlider);
 
-    const urls = await sut.extract(galleryItem(FEED_DESCRIPTION));
+    const urls = await sut.images(galleryItem(FEED_DESCRIPTION));
 
     assert.deepEqual(urls, [
       'https://www.linux.org.ru/images/24116/original.png',
@@ -429,10 +423,10 @@ describe('LorImageExtractor: догрузка страницы поста', () =
 });
 
 /*
- * extractFromUrl — путь для resend постов, которых уже нет в фиде.
+ * imagesFromUrl — путь для resend постов, которых уже нет в фиде.
  * Фикстуры отражают реальную разметку gallery/workplaces.
  */
-describe('LorImageExtractor.extractFromUrl', () => {
+describe('LorSite.imagesFromUrl', () => {
   const WORKPLACES = [
     '<html><body><div class="msg-container">',
     '<div class="slider-parent"><div class="swiffy-slider">',
@@ -447,10 +441,10 @@ describe('LorImageExtractor.extractFromUrl', () => {
   ].join('\n');
 
   it('достаёт все слайды поста, которого нет в фиде', async () => {
-    const { extractor: sut, calls } = extractorWithPage(WORKPLACES);
+    const { site: sut, calls } = siteWithPage(WORKPLACES);
     const url = 'https://www.linux.org.ru/gallery/workplaces/18348513';
 
-    const urls = await sut.extractFromUrl!(url);
+    const urls = await sut.imagesFromUrl(url);
 
     assert.deepEqual(urls, [
       'https://www.linux.org.ru/images/23786/original.png',
@@ -462,31 +456,31 @@ describe('LorImageExtractor.extractFromUrl', () => {
   });
 
   it('не тащит аватарки и прочее вне галереи', async () => {
-    const { extractor: sut } = extractorWithPage(WORKPLACES);
+    const { site: sut } = siteWithPage(WORKPLACES);
 
-    const urls = await sut.extractFromUrl!(
+    const urls = await sut.imagesFromUrl(
       'https://www.linux.org.ru/gallery/workplaces/18348513'
     );
 
     assert.equal(urls.some(url => url.includes('99999')), false);
   });
 
-  it('кеширует страницу между extract и extractFromUrl', async () => {
-    const { extractor: sut, calls } = extractorWithPage(WORKPLACES);
+  it('кеширует страницу между images и imagesFromUrl', async () => {
+    const { site: sut, calls } = siteWithPage(WORKPLACES);
     const url = 'https://www.linux.org.ru/gallery/workplaces/18348513';
 
-    await sut.extract(galleryItem(FEED_DESCRIPTION, url));
-    await sut.extractFromUrl!(url);
+    await sut.images(galleryItem(FEED_DESCRIPTION, url));
+    await sut.imagesFromUrl(url);
 
     assert.equal(calls.length, 1, 'страница должна грузиться один раз');
   });
 
   it('на сбое страницы возвращает пустой массив, а не бросает', async () => {
-    const { extractor: sut } = extractorWithPage('', {
+    const { site: sut } = siteWithPage('', {
       failWith: new Error('HTTP 500')
     });
 
-    const urls = await sut.extractFromUrl!(
+    const urls = await sut.imagesFromUrl(
       'https://www.linux.org.ru/gallery/workplaces/18348513'
     );
 
@@ -494,9 +488,9 @@ describe('LorImageExtractor.extractFromUrl', () => {
   });
 
   it('не ходит на страницы не-галереи', async () => {
-    const { extractor: sut, calls } = extractorWithPage(WORKPLACES);
+    const { site: sut, calls } = siteWithPage(WORKPLACES);
 
-    const urls = await sut.extractFromUrl!(
+    const urls = await sut.imagesFromUrl(
       'https://www.linux.org.ru/forum/talks/18348513'
     );
 
@@ -504,28 +498,11 @@ describe('LorImageExtractor.extractFromUrl', () => {
     assert.deepEqual(calls, [], 'обычные темы не должны дёргать сеть');
   });
 
-  it('выключенный fetchPageImages отключает и extractFromUrl', async () => {
-    const calls: string[] = [];
-    const sut = new LorImageExtractor({
-      fetchPageImages: false,
-      fetchPage: async url => {
-        calls.push(url);
-        return WORKPLACES;
-      }
-    });
-
-    const urls = await sut.extractFromUrl!(
-      'https://www.linux.org.ru/gallery/workplaces/18348513'
-    );
-
-    assert.deepEqual(urls, []);
-    assert.deepEqual(calls, []);
-  });
 });
 
-describe('extractLorDescription', () => {
+describe('LorSite.description', () => {
   it('вырезает блоки с картинками и строку тегов', async () => {
-    const html = extractLorDescription(
+    const html = site.description(
       item(
         '<div class="medium-image-container"><img src="a.jpg"></div>' +
           '<p>Собственно текст поста</p>' +
@@ -540,7 +517,7 @@ describe('extractLorDescription', () => {
   });
 
   it('вырезает <picture> и <figure> целиком', async () => {
-    const html = extractLorDescription(
+    const html = site.description(
       item(
         '<figure><picture><source srcset="a.png"><img src="a.png"></picture>' +
           '<figcaption>подпись</figcaption></figure><p>Текст</p>'

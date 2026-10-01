@@ -99,10 +99,26 @@ describe('TemplateManager', () => {
   it('бросает ошибку, если файл шаблона невалиден', async () => {
     manager.register('broken', join(dir, 'broken.yml'));
 
-    await assert.rejects(
-      () => manager.loadOne('broken'),
-      /Invalid template:/
-    );
+    // В сообщении должны быть и источник, и путь: иначе при нескольких
+    // источниках непонятно, какой файл чинить.
+    await assert.rejects(() => manager.loadOne('broken'), (error: Error) => {
+      assert.match(error.message, /Invalid template for source "broken"/);
+      assert.match(error.message, /broken\.yml/);
+      assert.match(error.message, /top-level "template" string/);
+      return true;
+    });
+  });
+
+  it('несуществующий файл шаблона называет источник и путь', async () => {
+    manager.register('missing', join(dir, 'nope.yml'));
+
+    // Голый `ENOENT: no such file or directory` не говорит ни источника,
+    // ни что именно чинить — бот при этом не стартует вовсе.
+    await assert.rejects(() => manager.loadOne('missing'), (error: Error) => {
+      assert.match(error.message, /Cannot read template for source "missing"/);
+      assert.match(error.message, /nope\.yml/);
+      return true;
+    });
   });
 
   it('перечитывает шаблон с диска', async () => {

@@ -2,37 +2,11 @@ import { randomInt } from 'node:crypto';
 
 import type { VK } from 'vk-io';
 
+import { HttpStatusError, isPermanentHttpError } from '../core/http.js';
 import type { ImageDownloadFailure } from '../core/types.js';
 import { toMessage } from '../utils/to-message.js';
 
 const VK_MAX_ATTACHMENTS_PER_MESSAGE = 10;
-
-/** Ошибка запроса картинки с сохранённым HTTP-статусом. */
-class HttpStatusError extends Error {
-  constructor(
-    readonly status: number,
-    statusText: string
-  ) {
-    super(`Image request failed: HTTP ${status} ${statusText}`);
-  }
-}
-
-/**
- * Стоит ли повторять запрос после этой ошибки.
- *
- * HTTP-статус известен в момент ответа, поэтому решение принимается по нему
- * самому, а не разбором строки сообщения. Исключения — 408 и 429: там сервер
- * прямо просит повторить позже.
- */
-function isPermanentHttpError(error: unknown): boolean {
-  if (!(error instanceof HttpStatusError)) {
-    return false;
-  }
-
-  const { status } = error;
-
-  return status >= 400 && status < 500 && status !== 408 && status !== 429;
-}
 
 /** Отрезает параметры от MIME-типа: `image/jpeg; charset=binary` -> `image/jpeg`. */
 function bareContentType(value: string): string {

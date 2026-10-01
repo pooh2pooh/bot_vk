@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import YAML from 'yaml';
 
 import type { FeedEntry, TemplateData } from '../core/types.js';
+import { toMessage } from '../utils/to-message.js';
 
 interface TemplateFile {
   template: string;
@@ -39,11 +40,28 @@ export class TemplateManager {
       throw new Error(`Template not registered for source: ${sourceId}`);
     }
 
-    const source = await readFile(entry.path, 'utf8');
+    /*
+     * Ошибка чтения обёрнута: без источника и пути в сообщении остаётся
+     * `ENOENT: no such file or directory`, по которому непонятно, ЧТО чинить.
+     */
+    let source: string;
+
+    try {
+      source = await readFile(entry.path, 'utf8');
+    } catch (error) {
+      throw new Error(
+        `Cannot read template for source "${sourceId}": ${entry.path} — ` +
+          toMessage(error)
+      );
+    }
+
     const data = YAML.parse(source) as TemplateFile;
 
     if (!data.template || typeof data.template !== 'string') {
-      throw new Error(`Invalid template: ${entry.path}`);
+      throw new Error(
+        `Invalid template for source "${sourceId}": ${entry.path} — ` +
+          'expected a top-level "template" string'
+      );
     }
 
     this.templates.set(sourceId, { path: entry.path, template: data.template });

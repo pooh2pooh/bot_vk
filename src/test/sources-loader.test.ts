@@ -1,179 +1,325 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { describe, it } from 'node:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+
+import YAML from 'yaml';
 
 import { loadSources } from '../config/sources-loader.js';
+import type { SourceConfig } from '../config/source-config.js';
 
-let dir: string;
-let counter = 0;
+/**
+ * Загрузчик `config/sources.yml`.
+ *
+ * Главное, что здесь проверяется: конфиг либо полностью корректен, либо падает
+ * со СПИСКОМ проблем. Молчаливый дефолт — худший вариант, потому что источник
+ * выглядит рабочим, но делает не то, что написано.
+ */
 
-/** Пишет sources.yml во временный файл и парсит его. */
-async function load(yaml: string) {
-  const path = join(dir, `sources-${counter++}.yml`);
-  await writeFile(path, yaml, 'utf8');
+/** Минимально корректный источник: все обязательные поля на месте. */
+function validSource(overrides: Record<string, unknown> = {}): SourceConfig {
+  return {
+    id: 'demo',
+    name: 'Demo',
+    type: 'rss',
+    site: 'none',
+    enabled: true,
+    url: 'https://example.org/feed',
+    requireImages: false,
+    enrich: 'none',
+    textMode: 'feed',
+    textLimit: 200,
+    template: 'templates/demo.yml',
+    pollIntervalMs: 300_000,
+    requestTimeoutMs: 30_000,
+    ...overrides
+  } as SourceConfig;
+}
+
+async function load(sources: unknown[]): Promise<SourceConfig[]> {
+  const path = join(mkdtempSync(join(tmpdir(), 'bot-config-')), 'sources.yml');
+  writeFileSync(path, YAML.stringify({ sources }));
+
   return loadSources(path);
 }
 
-before(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'vk-feed-bot-sources-'));
+async function loadExpectingError(sources: unknown[]): Promise<string> {
+  try {
+    await load(sources);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  throw new Error('Ожидалась ошибка, а конфиг загрузился');
+}
+
+describe('sources-loader: корректный конфиг', () => {
+  it('читает источник целиком', async () => {
+    const [source] = await load([validSource()]);
+
+    assert.equal(source?.id, 'demo');
+    assert.equal(source?.textMode, 'feed');
+    assert.equal(source?.textLimit, 200);
+  });
+
+  it('includeFilter и generateWhen доезжают как строки', async () => {
+    const [source] = await load([
+      validSource({
+        enrich: 'openrouter',
+        promptPath: 'templates/p.txt',
+        textMode: 'feed',
+        includeFilter: '^\\[Stable Update\\]',
+        generateWhen: '^\\[Stable Update\\]'
+      })
+    ]);
+
+    assert.equal(source?.includeFilter, '^\\[Stable Update\\]');
+    assert.equal(source?.generateWhen, '^\\[Stable Update\\]');
+  });
+
+  it('regexp в одинарных кавычках не теряет обратный слэш', async () => {
+    // Файл пишется руками, а не через YAML.stringify: stringify экранирует
+    // по-своему и не воспроизводит ровно ту строку, о которой идёт речь.
+    const path = join(mkdtempSync(join(tmpdir(), 'bot-config-')), 'sources.yml');
+    writeFileSync(
+      path,
+      [
+        'sources:',
+        '  - id: m',
+        "    name: M",
+        '    type: rss',
+        '    site: none',
+        '    enabled: true',
+        '    url: https://example.org/feed',
+        '    requireImages: false',
+        '    enrich: none',
+        '    textMode: feed',
+        '    textLimit: 200',
+        '    template: templates/m.yml',
+        '    pollIntervalMs: 300000',
+        '    requestTimeoutMs: 30000',
+        "    includeFilter: '^\\[Stable Update\\]'",
+        ''
+      ].join('\n')
+    );
+
+    const [source] = await loadSources(path);
+
+    assert.equal(source?.includeFilter, '^\\[Stable Update\\]');
+  });
 });
 
-after(async () => {
-  await rm(dir, { recursive: true, force: true });
+describe('sources-loader: обязательные поля', () => {
+  it('перечисляет ВСЕ отсутствующие обязательные поля сразу', async () => {
+    // Бот перезапускается под pm2: падение на первом поле означало бы серию
+    // рестартов с одним и тем же сообщением.
+    const message = await loadExpectingError([{}]);
+
+    for (const field of [
+      'id',
+      'name',
+      'type',
+      'site',
+      'enabled',
+      'url',
+      'requireImages',
+      'enrich',
+      'textMode',
+      'textLimit',
+      'template',
+      'pollIntervalMs',
+      'requestTimeoutMs'
+    ]) {
+      assert.match(message, new RegExp(`\\.${field}: is required`), `нет ${field}`);
+    }
+  });
+
+  it('не выводит textMode из enrich — режим обязателен', async () => {
+    // Старое поведение: отсутствующий textMode вычислялся из enrich, и опечатка
+    // в YAML молча превращала источник в другой источник.
+    const raw = validSource({ enrich: 'openrouter', promptPath: 't.txt' }) as unknown as Record<
+      string,
+      unknown
+    >;
+    delete raw.textMode;
+
+    assert.match(
+      await loadExpectingError([raw]),
+      /\.textMode: is required/
+    );
+  });
+
+  it('не подставляет молчаливый дефолт вместо отсутствующего поля', async () => {
+    const message = await loadExpectingError([validSource({ textLimit: undefined })]);
+
+    assert.match(message, /\.textLimit: is required/);
+  });
 });
 
-describe('loadSources', () => {
-  it('подставляет дефолты для необязательных полей', async () => {
-    const [source] = await load(`
-sources:
-  - id: forum
-    url: https://example.org/atom
-    template: templates/forum_post.yml
-`);
+describe('sources-loader: значения полей', () => {
+  it('отвергает неизвестное поле и называет допустимые', async () => {
+    const message = await loadExpectingError([validSource({ includePattern: 'x' })]);
 
-    assert.equal(source?.id, 'forum');
-    assert.equal(source?.name, 'forum');
-    assert.equal(source?.type, 'rss');
-    assert.equal(source?.enabled, true);
-    assert.equal(source?.requireImages, false);
-    assert.equal(source?.imageExtractor, 'none');
-    assert.equal(source?.enrich, 'none');
-    assert.equal(source?.pollIntervalMs, undefined);
-    assert.equal(source?.promptPath, undefined);
+    assert.match(message, /\.includePattern: unknown field/);
+    assert.match(message, /Allowed:.*includeFilter/s);
   });
 
-  it('читает все явно заданные поля', async () => {
-    const [source] = await load(`
-sources:
-  - id: screenshots
-    name: LOR Screenshots
-    type: rss
-    enabled: false
-    url: https://example.org/rss
-    requireImages: true
-    imageExtractor: lor
-    enrich: openrouter
-    template: templates/screenshot_post.yml
-    pollIntervalMs: 120000
-    requestTimeoutMs: 15000
-    promptPath: templates/other_prompt.txt
-`);
+  it('отвергает старые имена полей', async () => {
+    // Никакой обратной совместимости: старая конфигурация должна сказать об
+    // этом прямо, а не работать «как раньше».
+    const message = await loadExpectingError([validSource({ imageExtractor: 'lor' })]);
 
-    assert.equal(source?.name, 'LOR Screenshots');
-    assert.equal(source?.enabled, false);
-    assert.equal(source?.requireImages, true);
-    assert.equal(source?.imageExtractor, 'lor');
-    assert.equal(source?.enrich, 'openrouter');
-    assert.equal(source?.pollIntervalMs, 120_000);
-    assert.equal(source?.requestTimeoutMs, 15_000);
-    assert.equal(source?.promptPath, 'templates/other_prompt.txt');
+    assert.match(message, /\.imageExtractor: unknown field/);
   });
 
-  it('собирает проблемы всех источников в одно сообщение', async () => {
-    await assert.rejects(
-      () =>
-        load(`
-sources:
-  - id: Bad_Id
-    url: https://example.org/atom
-    template: t.yml
-  - id: second
-    url: ftp://example.org/atom
-    template: t.yml
-  - id: third
-    url: https://example.org/atom
-  - id: ok
-    url: https://example.org/atom
-    template: t.yml
-`),
-      (error: Error) => {
-        const message = error.message;
+  it('отвергает id не в нижнем регистре', async () => {
+    const message = await loadExpectingError([validSource({ id: 'Demo' })]);
 
-        assert.match(message, /sources\[0\]: id must be a lowercase/);
-        assert.match(message, /sources\[1\]\.url: must be a valid http\(s\) URL/);
-        assert.match(message, /sources\[2\]\.template: is required/);
-        return true;
-      }
+    assert.match(message, /\.id: must be a lowercase/);
+  });
+
+  it('отвергает не-http адрес', async () => {
+    const message = await loadExpectingError([validSource({ url: 'ftp://example.org/f' })]);
+
+    assert.match(message, /\.url: must be an http\(s\) URL/);
+  });
+
+  it('отвергает неизвестный режим и перечисляет допустимые', async () => {
+    const message = await loadExpectingError([validSource({ textMode: 'truncated' })]);
+
+    assert.match(message, /\.textMode: must be one of feed, feedFull, generated/);
+  });
+
+  it('отвергает неизвестный способ обогащения', async () => {
+    const message = await loadExpectingError([validSource({ enrich: 'gpt' })]);
+
+    assert.match(message, /\.enrich: must be one of none, openrouter/);
+  });
+
+  it('отвергает нецелые и неположительные интервалы', async () => {
+    assert.match(
+      await loadExpectingError([validSource({ pollIntervalMs: 0 })]),
+      /\.pollIntervalMs: must be a positive integer/
+    );
+    assert.match(
+      await loadExpectingError([validSource({ pollIntervalMs: 1.5 })]),
+      /\.pollIntervalMs: must be a positive integer/
+    );
+    assert.match(
+      await loadExpectingError([validSource({ textLimit: -5 })]),
+      /\.textLimit: must be a positive integer/
     );
   });
 
-  it('внутри одного источника проверяет до первой ошибки', async () => {
-    // parseOne выходит на первом невалидном поле, поэтому следующие
-    // проблемы того же источника не выводятся — зато падать боту не даёт
-    // ни одна из них: пользователь видит всё, что нужно исправить.
-    await assert.rejects(
-      () =>
-        load(`
-sources:
-  - id: Bad_Id
-    url: ftp://example.org/atom
-    template: t.yml
-`),
-      (error: Error) => {
-        const lines = error.message
-          .split('\n')
-          .filter(line => line.includes('sources[0]'));
+  it('отвергает сломанный regexp и называет поле', async () => {
+    // Сломанный шаблон тихо отсёк бы весь фид: пользователь увидел бы просто
+    // пустой источник и не понял бы почему.
+    const message = await loadExpectingError([
+      validSource({ includeFilter: '[Stable' })
+    ]);
 
-        assert.equal(lines.length, 1);
-        assert.match(error.message, /sources\[0\]: id must be a lowercase/);
-        return true;
-      }
-    );
+    assert.match(message, /\.includeFilter: must be a valid regular expression/);
   });
 
-  it('ловит дубликаты id', async () => {
-    await assert.rejects(
-      () =>
-        load(`
-sources:
-  - id: forum
-    url: https://example.org/a
-    template: t.yml
-  - id: forum
-    url: https://example.org/b
-    template: t.yml
-`),
-      /duplicate source id "forum"/
+  it('отвергает пустой фильтр', async () => {
+    // `new RegExp('')` совпадает со всем: пустой шаблон тихо отключил бы
+    // фильтр вместо того, чтобы сломать конфиг.
+    assert.match(
+      await loadExpectingError([validSource({ generateWhen: '' })]),
+      /\.generateWhen: must be a valid regular expression/
     );
   });
+});
 
-  it('требует хотя бы один источник', async () => {
-    await assert.rejects(() => load('sources: []'), /at least one entry/);
+describe('sources-loader: согласованность', () => {
+  it('generated без enrich — ошибка, а не тихий откат на текст фида', async () => {
+    const message = await loadExpectingError([validSource({ textMode: 'generated' })]);
+
+    assert.match(message, /textMode: "generated" requires enrich/);
   });
 
-  it('требует верхнеуровневый массив sources', async () => {
-    await assert.rejects(
-      () => load('other: 1'),
-      /expected a top-level "sources" array/
-    );
+  it('generateWhen при enrich: none бессмысленен', async () => {
+    const message = await loadExpectingError([
+      validSource({ generateWhen: '^Update' })
+    ]);
+
+    assert.match(message, /generateWhen: has no effect with enrich "none"/);
   });
 
-  it('отвергает id с недопустимыми символами', async () => {
-    await assert.rejects(
-      () =>
-        load(`
-sources:
-  - id: "Плохой id"
-    url: https://example.org/atom
-    template: t.yml
-`),
-      /id must be a lowercase a-z0-9_- string/
-    );
+  it('enrich без триггера генерации — ошибка: модель не была бы вызвана', async () => {
+    const message = await loadExpectingError([
+      validSource({ enrich: 'openrouter', promptPath: 't.txt' })
+    ]);
+
+    assert.match(message, /the enricher would never be called/);
   });
 
-  it('отвергает нечисловые интервалы', async () => {
-    await assert.rejects(
-      () =>
-        load(`
-sources:
-  - id: forum
-    url: https://example.org/atom
-    template: t.yml
-    requestTimeoutMs: soon
-`),
-      /requestTimeoutMs: must be a number/
-    );
+  it('enrich требует свой promptPath', async () => {
+    const message = await loadExpectingError([
+      validSource({ enrich: 'openrouter', textMode: 'generated' })
+    ]);
+
+    assert.match(message, /\.promptPath: is required when enrich is "openrouter"/);
+  });
+
+  it('generated вместе с generateWhen — избыточно', async () => {
+    const message = await loadExpectingError([
+      validSource({
+        enrich: 'openrouter',
+        promptPath: 't.txt',
+        textMode: 'generated',
+        generateWhen: '^Update'
+      })
+    ]);
+
+    assert.match(message, /drop one of them/);
+  });
+
+  it('feed + generateWhen — рабочая схема выборочной генерации', async () => {
+    // Именно так настроен manjaro: анонсы переводятся, новости идут как есть.
+    const [source] = await load([
+      validSource({
+        enrich: 'openrouter',
+        promptPath: 't.txt',
+        textMode: 'feed',
+        generateWhen: '^\\[Stable Update\\]'
+      })
+    ]);
+
+    assert.equal(source?.textMode, 'feed');
+    assert.equal(source?.generateWhen, '^\\[Stable Update\\]');
+  });
+});
+
+describe('sources-loader: список источников', () => {
+  it('отвергает пустой список', async () => {
+    assert.match(await loadExpectingError([]), /must contain at least one entry/);
+  });
+
+  it('отвергает повторяющийся id один раз, а не по разу на каждое повторение', async () => {
+    const message = await loadExpectingError([
+      validSource({ id: 'a' }),
+      validSource({ id: 'b' }),
+      validSource({ id: 'a' })
+    ]);
+
+    const occurrences = message.match(/duplicate source id "a"/g) ?? [];
+
+    assert.equal(occurrences.length, 1);
+    assert.doesNotMatch(message, /duplicate source id "b"/);
+  });
+
+  it('отвергает файл без массива sources', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'bot-config-')), 'sources.yml');
+    writeFileSync(path, 'sources: nope\n');
+
+    await assert.rejects(loadSources(path), /expected a top-level "sources" array/);
+  });
+
+  it('элемент не-объект — ошибка, а не молчаливый пустой источник', async () => {
+    // Тихий пустой список выглядел бы как «источников просто нет».
+    assert.match(await loadExpectingError(['строка']), /sources\[0\]: must be a mapping/);
+    assert.match(await loadExpectingError([[1, 2]]), /sources\[0\]: must be a mapping/);
   });
 });

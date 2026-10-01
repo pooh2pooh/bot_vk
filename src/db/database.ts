@@ -3,12 +3,21 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { Admin, FeedEntry } from '../core/types.js';
-import { toIsoDate } from '../core/text-utils.js';
 
 /**
- * Текущая версия схемы. Поднимается на 1, когда в базу добавляется миграция.
+ * Состояние записи в базе.
+ *
+ * `skipped` и `pending` — не одно и то же: первое означает «бот увидел пост и
+ * решил его не слать», второе — «видел, но ещё не решал». Оба закрывают
+ * отправку, но показывать их в списке по-разному полезно.
  */
-const SCHEMA_VERSION = 1;
+export type EntryState = 'sent' | 'skipped' | 'pending';
+
+/** Запись из базы вместе с её состоянием — для показа админу. */
+export interface StoredEntry {
+  entry: FeedEntry;
+  state: EntryState;
+}
 
 interface FeedEntryRow {
   id: string;
@@ -44,10 +53,20 @@ export class BotDatabase {
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('foreign_keys = ON');
 
-    this.migrate();
+    this.createSchema();
   }
 
-  private migrate(): void {
+  /**
+   * Схема создаётся целиком и всегда: `CREATE TABLE IF NOT EXISTS` ничего не
+   * ломает в существующей базе, поэтому отдельных версий схемы не нужно.
+   *
+   * Раньше здесь же была миграция, переводившая сохранённые даты в ISO: тогда
+   * даты писались в формате RFC-822, и SQLite сравнивал их как текст, из-за
+   * чего «последний пост» выбирался неверно. Сейчас ISO гарантирован на входе
+   * (`core/feed-item.ts`), поэтому и чинить старые строки незачем: legacy-миграция
+   * была удалена вместе с причиной.
+   */
+  private createSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS feed_entries (
         id TEXT PRIMARY KEY,
@@ -84,73 +103,6 @@ export class BotDatabase {
       CREATE INDEX IF NOT EXISTS idx_feed_entries_source_published
       ON feed_entries(source, published);
     `);
-
-    /*
-     * user_version — встроенный в SQLite счётчик схемы. Он нужен здесь, чтобы
-     * перевод дат в ISO выполнялся ОДИН раз: normalizeDates() читает всю
-     * таблицу, и повторять это на каждом старте — лишняя работа, растущая с
-     * числом записей. Идемпотентности миграции мы всё равно не доверяем, если
-     * версия вдруг окажется ниже ожидаемой (откат даумапа, старая копия БД).
-     */
-    if (this.schemaVersion < SCHEMA_VERSION) {
-      this.normalizeDates();
-      this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
-    }
-  }
-
-  private get schemaVersion(): number {
-    const row = this.db.pragma('user_version', { simple: true });
-    return typeof row === 'number' ? row : 0;
-  }
-
-  /**
-   * Разовый перевод сохранённых дат в ISO-8601.
-   *
-   * До этого published/updated писались как есть, в формате RFC-822, и
-   * SQLite сравнивал их как текст: "29 Jul" > "23 Sep" лексикографически.
-   * Из-за этого getLatestEntry возвращал не последний пост. Новые записи уже
-   * пишутся в ISO, но старые остались бы сломанными, пока их не переписал бы
-   * очередной poll (а он их не переписывает — INSERT OR IGNORE).
-   *
-   * Идемпотентна: строки, которые уже ISO, `toIsoDate` не трогает — а
-   * распознать их можно простым признаком формата.
-   */
-  private normalizeDates(): void {
-    const rows = this.statement(
-      `SELECT id, published, updated FROM feed_entries`
-    ).all() as { id: string; published: string; updated: string }[];
-
-    if (rows.length === 0) {
-      return;
-    }
-
-    const update = this.statement(
-      `UPDATE feed_entries SET published = ?, updated = ? WHERE id = ?`
-    );
-
-    const migrate = this.db.transaction((items: typeof rows) => {
-      let changed = 0;
-
-      for (const row of items) {
-        const published = toIsoDate(row.published);
-        const updated = toIsoDate(row.updated);
-
-        if (!published || !updated) {
-          continue;
-        }
-
-        if (published === row.published && updated === row.updated) {
-          continue;
-        }
-
-        update.run(published, updated, row.id);
-        changed++;
-      }
-
-      return changed;
-    });
-
-    migrate(rows);
   }
 
   /** Компилирует запрос один раз и переиспользует его дальше. */
@@ -248,6 +200,38 @@ export class BotDatabase {
       .get(sourceId) as FeedEntryRow | undefined;
 
     return row ? this.toFeedEntry(row) : null;
+  }
+
+  /**
+   * Последние записи источника, свежие сверху.
+   *
+   * Отдельный метод, а не параметр у `getLatestEntry`: показ списка и выбор
+   * поста админом — разные задачи, и смешивать их значило бы тащить в
+   * `getLatestEntry` параметры, которые ему не нужны ни в одном сценарии.
+   *
+   * Порядок ОБЯЗАН совпадать с `getLatestEntry`: иначе «пост №1» в списке и
+   * «последний пост» указывали бы на разные записи, что для человека
+   * неразличимо и потому крайне запутывает.
+   */
+  listRecentEntries(sourceId: string, limit: number): StoredEntry[] {
+    const rows = this
+      .statement(`
+        SELECT id, title, link, author, content, published, updated, source,
+               image_urls_json, sent_at, ignored_at
+        FROM feed_entries
+        WHERE source = ?
+        ORDER BY published DESC, first_seen_at DESC
+        LIMIT ?
+      `)
+      .all(sourceId, limit) as (FeedEntryRow & {
+      sent_at: string | null;
+      ignored_at: string | null;
+    })[];
+
+    return rows.map(row => ({
+      entry: this.toFeedEntry(row),
+      state: row.sent_at ? 'sent' : row.ignored_at ? 'skipped' : 'pending'
+    }));
   }
 
   private toFeedEntry(row: FeedEntryRow): FeedEntry {

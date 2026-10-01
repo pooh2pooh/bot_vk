@@ -1,15 +1,24 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import {
-  PingvinusImageExtractor,
-  extractPingvinusDescription,
-  extractPingvinusPostText
-} from '../sources/image-extractors/pingvinus-image-extractor.js';
-import { truncateText } from '../core/text-utils.js';
-import type { AtomItem } from '../core/atom-item.js';
+import { PingvinusSite } from '../sources/sites/pingvinus.js';
+import type { PageContext, PageLoader } from '../core/page-based-site.js';
+import type { FeedItem } from '../core/feed-item.js';
+import { truncateText } from '../core/text.js';
+
+const CTX: PageContext = {
+  timeoutMs: 30_000,
+  userAgent: 'test',
+  pageCacheSize: 500,
+  maxParallelPages: 4
+};
 
 const POST_URL = 'https://pingvinus.ru/gallery/5532';
+
+/** Собирает стратегию с подменённой загрузкой страницы. */
+function pingvinus(loadPage: PageLoader, pageCacheSize = CTX.pageCacheSize): PingvinusSite {
+  return new PingvinusSite({ ...CTX, pageCacheSize }, loadPage);
+}
 
 /** Разметка поста pingvinus: картинка в .pictureThumb, текст в .text. */
 const POST_PAGE = [
@@ -38,37 +47,35 @@ const POST_PAGE = [
   '</body></html>'
 ].join('\n');
 
-function extractorWithPage(
+function siteWithPage(
   page: string,
   options: { failWith?: Error } = {}
-): { sut: PingvinusImageExtractor; calls: string[] } {
+): { sut: PingvinusSite; calls: string[] } {
   const calls: string[] = [];
 
   return {
     calls,
-    sut: new PingvinusImageExtractor({
-      fetchPage: async url => {
-        calls.push(url);
+    sut: pingvinus(async url => {
+      calls.push(url);
 
-        if (options.failWith) {
-          throw options.failWith;
-        }
-
-        return page;
+      if (options.failWith) {
+        throw options.failWith;
       }
+
+      return page;
     })
   };
 }
 
-function galleryItem(over: Partial<AtomItem> = {}): AtomItem {
-  return { description: '', link: POST_URL, guid: `5532 at https://pingvinus.ru`, ...over };
+function galleryItem(over: Partial<FeedItem> = {}): FeedItem {
+  return { content: '', link: POST_URL, id: `5532 at https://pingvinus.ru`, ...over };
 }
 
-describe('PingvinusImageExtractor', () => {
+describe('PingvinusSite', () => {
   it('берёт оригинал картинки из .pictureThumb', async () => {
-    const { sut, calls } = extractorWithPage(POST_PAGE);
+    const { sut, calls } = siteWithPage(POST_PAGE);
 
-    const urls = await sut.extract(galleryItem());
+    const urls = await sut.images(galleryItem());
 
     assert.deepEqual(urls, [
       'https://pingvinus.ru/cr_images/userpicture/n/5532-0.jpg'
@@ -77,9 +84,9 @@ describe('PingvinusImageExtractor', () => {
   });
 
   it('не тащит баннеры, сайдбар и футер', async () => {
-    const { sut } = extractorWithPage(POST_PAGE);
+    const { sut } = siteWithPage(POST_PAGE);
 
-    const urls = await sut.extract(galleryItem());
+    const urls = await sut.images(galleryItem());
 
     assert.equal(urls.length, 1);
     assert.equal(urls.some(url => url.includes('5508')), false);
@@ -87,38 +94,38 @@ describe('PingvinusImageExtractor', () => {
   });
 
   it('не ходит на страницы не-галереи', async () => {
-    const { sut, calls } = extractorWithPage(POST_PAGE);
+    const { sut, calls } = siteWithPage(POST_PAGE);
     const link = 'https://pingvinus.ru/news/5533';
 
-    const urls = await sut.extract({ description: '', link });
+    const urls = await sut.images({ content: '', link });
 
     assert.deepEqual(urls, []);
     assert.deepEqual(calls, []);
   });
 
   it('кеширует страницу между вызовами', async () => {
-    const { sut, calls } = extractorWithPage(POST_PAGE);
+    const { sut, calls } = siteWithPage(POST_PAGE);
 
-    await sut.extract(galleryItem());
-    await sut.extract(galleryItem());
-    await sut.extractFromUrl(POST_URL);
-    await sut.extractTextFromUrl(POST_URL);
+    await sut.images(galleryItem());
+    await sut.images(galleryItem());
+    await sut.imagesFromUrl(POST_URL);
+    await sut.postText(POST_URL);
 
     assert.equal(calls.length, 1, 'страница должна грузиться один раз');
   });
 
   it('при сбое страницы не бросает, а отдаёт пустое', async () => {
-    const { sut } = extractorWithPage('', { failWith: new Error('HTTP 500') });
+    const { sut } = siteWithPage('', { failWith: new Error('HTTP 500') });
 
-    assert.deepEqual(await sut.extract(galleryItem()), []);
-    assert.deepEqual(await sut.extractFromUrl(POST_URL), []);
-    assert.equal(await sut.extractTextFromUrl(POST_URL), '');
+    assert.deepEqual(await sut.images(galleryItem()), []);
+    assert.deepEqual(await sut.imagesFromUrl(POST_URL), []);
+    assert.equal(await sut.postText(POST_URL), '');
   });
 
   it('достаёт текст поста для fallback', async () => {
-    const { sut } = extractorWithPage(POST_PAGE);
+    const { sut } = siteWithPage(POST_PAGE);
 
-    const text = await sut.extractTextFromUrl(POST_URL);
+    const text = await sut.postText(POST_URL);
 
     assert.equal(text.includes('Исходник: antiX-26'), true);
     assert.equal(text.includes('Предыстория'), true);
@@ -132,9 +139,9 @@ describe('PingvinusImageExtractor', () => {
   });
 
   it('не склеивает заголовок с текстом', async () => {
-    const { sut } = extractorWithPage(POST_PAGE);
+    const { sut } = siteWithPage(POST_PAGE);
 
-    const text = await sut.extractTextFromUrl(POST_URL);
+    const text = await sut.postText(POST_URL);
 
     assert.equal(
       text.includes('ПредысторияПрошлый'),
@@ -150,40 +157,42 @@ describe('PingvinusImageExtractor', () => {
 
   it('вытесняет старые записи кеша при переполнении', async () => {
     const calls: string[] = [];
-    const sut = new PingvinusImageExtractor({
-      pageCacheSize: 1,
-      fetchPage: async url => {
+    const sut = pingvinus(async url => {
         calls.push(url);
         return POST_PAGE;
-      }
-    });
+        }, 1);
 
-    await sut.extractFromUrl('https://pingvinus.ru/gallery/1');
-    await sut.extractFromUrl('https://pingvinus.ru/gallery/2');
-    await sut.extractFromUrl('https://pingvinus.ru/gallery/1');
+    await sut.imagesFromUrl('https://pingvinus.ru/gallery/1');
+    await sut.imagesFromUrl('https://pingvinus.ru/gallery/2');
+    await sut.imagesFromUrl('https://pingvinus.ru/gallery/1');
 
     assert.equal(calls.length, 3, 'первый пост вытеснен и грузится заново');
   });
 });
 
-describe('extractPingvinusPostText', () => {
-  it('возвращает пустую строку, если блока .text нет', () => {
-    assert.equal(extractPingvinusPostText('<html><body></body></html>'), '');
+describe('PingvinusSite.postText', () => {
+  it('возвращает пустую строку, если блока .text нет', async () => {
+    const { sut } = siteWithPage('<html><body></body></html>');
+
+    assert.equal(await sut.postText(POST_URL), '');
   });
 
-  it('берёт .text из статьи, а не из сайдбара', () => {
-    const html =
-      '<div class="text">подвал</div><article><div class="text">пост</div></article>';
-    const text = extractPingvinusPostText(html);
+  it('берёт .text из статьи, а не из сайдбара', async () => {
+    const { sut } = siteWithPage(
+      '<div class="text">подвал</div><article><div class="text">пост</div></article>'
+    );
+
+    const text = await sut.postText(POST_URL);
+
     assert.equal(text.includes('пост'), true);
     assert.equal(text.includes('подвал'), false);
   });
 });
 
-describe('extractPingvinusDescription', () => {
+describe('PingvinusSite.description', () => {
   it('вырезает картинку и ссылку "читать далее"', () => {
-    const html = extractPingvinusDescription({
-      description:
+    const html = siteWithPage('').sut.description({
+      content:
         '<div class="pictureThumb"><img src="/x.jpg"></div>' +
         '<p>Текст поста</p>' +
         '<p><a href="/gallery/5532">Читать далее</a></p>'

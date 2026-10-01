@@ -9,6 +9,14 @@ import type { FeedEntry } from '../core/types.js';
 import type { TemplateManager } from '../templates/manager.js';
 import type { VKSender } from '../vk/sender.js';
 
+/**
+ * Откат на текст источника, когда генерация не удалась.
+ *
+ * Отдельный файл, а не часть тестов пайплайна: проверяется граница обрезки
+ * финального текста сообщения. Обрезанный многоточием текст автора в 200
+ * символов уходил в чат, и пользователю было непонятно, что пост не целиком.
+ */
+
 const LONG_TEXT =
   'Первый абзац поста описывает, что вообще происходило и почему это важно. ' +
   'Второй абзац продолжает рассуждение и добавляет деталей. ' +
@@ -33,21 +41,23 @@ function entry(over: Partial<FeedEntry> = {}): FeedEntry {
 function harness(options: {
   entry?: FeedEntry;
   enrichFails?: boolean;
-  fallbackTextLimit?: number;
-  fetchOriginalText?: (link: string) => Promise<string>;
-  textFetchThrows?: Error;
+  textLimit?: number;
+  pageText?: string;
+  textMode?: 'feed' | 'feedFull' | 'generated';
 }) {
   const rendered: string[] = [];
 
   const db = {
     getLatestEntry: () => options.entry ?? entry(),
-    markSent: () => undefined
+    markSent: () => undefined,
+    updateEntryImages: () => undefined
   } as unknown as BotDatabase;
 
   const adapter: SourceAdapter = {
     sourceId: 'pingvinus',
     fetch: async () => [],
-    reextractImages: async () => null
+    imagesForPost: async () => [],
+    postText: async () => options.pageText ?? ''
   };
 
   const enricher: Enricher = {
@@ -60,11 +70,6 @@ function harness(options: {
     }
   };
 
-  const sender = {
-    send: async () => undefined,
-    consumeImageErrors: () => []
-  } as unknown as VKSender;
-
   const pipeline = new SourcePipeline({
     sourceId: 'pingvinus',
     sourceName: 'pingvinus',
@@ -75,10 +80,14 @@ function harness(options: {
       // Шаблон получает content уже готовым к подстановке.
       render: (_id: string, data: { content: string }) => {
         rendered.push(data.content);
+
         return data.content;
       }
     } as unknown as TemplateManager,
-    sender,
+    sender: {
+      send: async () => undefined,
+      consumeImageErrors: () => []
+    } as unknown as VKSender,
     logger: {
       info: () => undefined,
       warn: () => undefined,
@@ -86,20 +95,16 @@ function harness(options: {
       debug: () => undefined
     } as never,
     targetChat: 1,
-    fallbackTextLimit: options.fallbackTextLimit,
-    fetchOriginalText: options.fetchOriginalText
+    textMode: options.textMode ?? 'feed',
+    textLimit: options.textLimit ?? 200
   });
 
   return { pipeline, rendered };
 }
 
-describe('fallback, когда AI не ответил', () => {
-  it('укорачивает текст автора до лимита', async () => {
-    const h = harness({
-      enrichFails: true,
-      fallbackTextLimit: 200,
-      entry: entry()
-    });
+describe('откат на текст источника', () => {
+  it('укорачивает текст автора до textLimit', async () => {
+    const h = harness({ enrichFails: true, textLimit: 200 });
 
     await h.pipeline.resendLatest();
 
@@ -108,11 +113,7 @@ describe('fallback, когда AI не ответил', () => {
   });
 
   it('режет по границе слова и ставит многоточие', async () => {
-    const h = harness({
-      enrichFails: true,
-      fallbackTextLimit: 200,
-      entry: entry()
-    });
+    const h = harness({ enrichFails: true, textLimit: 200 });
 
     await h.pipeline.resendLatest();
 
@@ -127,43 +128,45 @@ describe('fallback, когда AI не ответил', () => {
 
   it('не трогает текст, если он короче лимита', async () => {
     const short = 'Короткий текст поста.';
-    const h = harness({
-      enrichFails: true,
-      fallbackTextLimit: 200,
-      entry: entry({ content: short })
-    });
+    const h = harness({ enrichFails: true, textLimit: 200, entry: entry({ content: short }) });
 
     await h.pipeline.resendLatest();
 
     assert.equal(h.rendered[0], short);
   });
 
-  it('берёт текст со страницы, если в фиде он пустой', async () => {
-    const fromPage = 'Текст прямо со страницы поста, которого нет в RSS.';
-    const seen: string[] = [];
+  it('feedFull отдаёт текст автора целиком', async () => {
     const h = harness({
       enrichFails: true,
-      fallbackTextLimit: 200,
-      fetchOriginalText: async link => {
-        seen.push(link);
-        return fromPage;
-      },
+      textMode: 'feedFull',
+      textLimit: 200,
+      entry: entry()
+    });
+
+    await h.pipeline.resendLatest();
+
+    assert.equal(h.rendered[0], LONG_TEXT);
+  });
+
+  it('берёт текст со страницы, если в фиде он пустой', async () => {
+    // У pingvinus описание в RSS пустое: без этого ушёл бы один заголовок.
+    const fromPage = 'Текст прямо со страницы поста, которого нет в RSS.';
+    const h = harness({
+      enrichFails: true,
+      textLimit: 200,
+      pageText: fromPage,
       entry: entry({ content: '' })
     });
 
     await h.pipeline.resendLatest();
 
-    assert.deepEqual(seen, ['https://pingvinus.ru/gallery/5532']);
     assert.equal(h.rendered[0], fromPage);
   });
 
   it('ошибка получения текста не отменяет отправку', async () => {
     const h = harness({
       enrichFails: true,
-      fallbackTextLimit: 200,
-      fetchOriginalText: async () => {
-        throw new Error('сеть легла');
-      },
+      textLimit: 200,
       entry: entry({ content: '' })
     });
 
@@ -173,16 +176,28 @@ describe('fallback, когда AI не ответил', () => {
     assert.equal((h.rendered[0] ?? '').length, 0);
   });
 
-  it('без fallbackTextLimit текст не укорачивается', async () => {
-    const h = harness({ enrichFails: true, entry: entry() });
+  it('при успешной генерации текст автора не используется', async () => {
+    const h = harness({
+      enrichFails: false,
+      textMode: 'generated',
+      textLimit: 200,
+      entry: entry()
+    });
 
     await h.pipeline.resendLatest();
 
-    assert.equal(h.rendered[0], LONG_TEXT);
+    assert.equal(h.rendered[0], 'Комментарий ИИ');
   });
 
-  it('при успешном ИИ текст автора не используется', async () => {
-    const h = harness({ enrichFails: false, fallbackTextLimit: 200, entry: entry() });
+  it('успешная генерация не обрезается textLimit', async () => {
+    // Лимит в конфиге ограничивает ТЕКСТ ИСТОЧНИКА. Обрезать сгенерированный
+    // текст значило бы выкинуть половину смысла, за который модель заплатила.
+    const h = harness({
+      enrichFails: false,
+      textMode: 'generated',
+      textLimit: 20,
+      entry: entry()
+    });
 
     await h.pipeline.resendLatest();
 

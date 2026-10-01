@@ -1,182 +1,148 @@
 import Parser from 'rss-parser';
-
-import type { DescriptionExtractor } from '../core/description-extractor.js';
-import type { ImageExtractor } from '../core/image-extractor.js';
-import type {
-  FetchOptions,
-  SourceAdapter
-} from '../core/source-adapter.js';
-import type { FeedEntry } from '../core/types.js';
-import type { AtomItem } from '../core/atom-item.js';
+import { fetchText, type HttpOptions } from '../core/http.js';
 import {
-  fetchText,
-  getAuthor,
-  itemPublished,
-  itemUpdated,
-  normalizeText
-} from '../core/text-utils.js';
+  itemEntryId,
+  toFeedEntry,
+  type FeedItem
+} from '../core/feed-item.js';
+import type { FeedEntry } from '../core/types.js';
+import type { FetchOptions, SourceAdapter } from '../core/source-adapter.js';
+import type { SiteStrategy } from '../core/site-strategy.js';
+import type { Filter } from '../core/filter.js';
 
-export interface RssSourceAdapterOptions {
+/** Настройки проверки одного RSS/Atom-источника. */
+export interface RssSourceOptions extends HttpOptions {
+  /** Ключ источника из config/sources.yml: он же префикс id записей. */
   sourceId: string;
-  url: string;
-  timeoutMs: number;
-  userAgent: string;
-  imageExtractor: ImageExtractor;
-  /** Если true — записи без картинок отбрасываются (напр. "скриншотные" источники). */
+
+  /** Адрес фида. */
+  feedUrl: string;
+
+  /**
+   * Показывать запись, только если заголовок подходит под фильтр.
+   *
+   * Пусто — показывать всё. Нужен сайтам, где в один фид свалены разные
+   * разделы: у manjaro.ru так отдаются и анонсы обновлений, и обычные
+   * новости, а нужны только анонсы.
+   */
+  includeFilter?: Filter;
+
+  /**
+   * Бросать запись без картинок.
+   *
+   * Источники новостей несут в основном текст и ждут в ленту, а источники
+   * скриншотов и релизов без картинки бессмысленны. Решение принимает
+   * конфигурация источника, а не код стратегии: стратегия обязана лишь
+   * вернуть то, что у неё есть.
+   */
   requireImages: boolean;
+
+  /** Стратегия сайта: как достать картинки и текст поста. */
+  strategy: SiteStrategy;
+
   /**
-   * Экстрактор текста описания. Реализацию по умолчанию (обычная нормализация
-   * HTML) даёт DescriptionExtractorRegistry под ключом `none`, а источники
-   * вроде LOR подключают свою, которая дополнительно вырезает из описания
-   * блоки картинок и теги.
+   * Куда сообщить, что разбор конкретной записи не удался.
+   *
+   * Молча проглатывать такие ошибки нельзя: иначе сломанный разбор сайта
+   * выглядит как «источник просто не принёс новых постов» и обнаруживается
+   * через месяц. Заголовок источника добавляет вызывающий код.
    */
-  extractDescription: DescriptionExtractor;
-  /**
-   * Если задан, в источник попадают только записи, чей link совпал с этим
-   * шаблоном. Нужен сайтам, у которых один фид на все рубрики: чтобы в
-   * «скриншоты» не попадали новости, а в источник — заметки.
-   */
-  includePattern?: RegExp;
+  onStrategyError?: (error: unknown) => void;
 }
 
 /**
- * Один универсальный адаптер для любого RSS/Atom источника.
- * Специфика конкретного сайта (домен картинок, разметка описания)
- * вынесена в подключаемые стратегии (ImageExtractor, extractDescription),
- * поэтому новый похожий источник добавляется конфигом, а не новым классом.
+ * Адаптер RSS/Atom — единственная реализация для всех сайтов на фидах.
+ *
+ * Разница между источниками целиком в `SiteStrategy`, `includeFilter` и
+ * `requireImages`: этот класс не знает ни про один сайт и одинаково работает
+ * с RSS 2.0, RDF и Atom, потому что различия снимает парсер.
  */
 export class RssSourceAdapter implements SourceAdapter {
   readonly sourceId: string;
-  private readonly parser: Parser<unknown>;
 
-  constructor(private readonly options: RssSourceAdapterOptions) {
+  private readonly parser = new Parser();
+
+  constructor(private readonly options: RssSourceOptions) {
     this.sourceId = options.sourceId;
-    this.parser = new Parser();
-  }
-
-  async fetch(options: FetchOptions = {}): Promise<FeedEntry[]> {
-    const xml = await fetchText(
-      this.options.url,
-      this.options.timeoutMs,
-      this.options.userAgent
-    );
-
-    const feed = await this.parser.parseString(xml);
-    const entries: FeedEntry[] = [];
-
-    for (const item of feed.items as AtomItem[]) {
-      /*
-       * Оба фильтра применяются ДО экстракции картинок: отброшенная запись
-       * не должна ни ходить на страницу поста, ни платить за это запросом.
-       * Для pingvinus это важно — в фиде смешаны новости, заметки и
-       * скриншоты, и страницы надо открывать только у последних.
-       */
-      if (this.options.includePattern && !this.matchesInclude(item)) {
-        continue;
-      }
-
-      const entry = await this.toFeedEntry(item, options.skipIds);
-
-      if (entry) {
-        entries.push(entry);
-      }
-    }
-
-    return entries;
-  }
-
-  private matchesInclude(item: AtomItem): boolean {
-    const pattern = this.options.includePattern;
-
-    if (!pattern) {
-      return true;
-    }
-
-    // guid у pingvinus — "5532 at https://pingvinus.ru", это не ссылка на
-    // пост, поэтому ориентируемся на link, а guid берём лишь как запасной
-    // вариант для фидов без <link>.
-    const candidates = [item.link, item.guid];
-
-    return candidates.some(
-      value => typeof value === 'string' && pattern.test(value.trim())
-    );
   }
 
   /**
-   * Переизвлекает картинки конкретной записи.
+   * Забирает фид и превращает его в записи конвейера.
    *
-   * Сначала пробуем свежий фид — это самый дешёвый путь. Но записи в базе
-   * бывают старше окна фида (RSS отдаёт только последние ~30 постов), и для
-   * resend такой пост в фиде просто отсутствует. Поэтому, если в фиде его не
-   * нашлось, идём на страницу поста напрямую: там картинки лежат всегда.
-   *
-   * Если не сработало ни то, ни другое — null, и вызывающий код остаётся на
-   * сохранённом значении, а не отправляет пост без картинок.
+   * Разбор записей не зависит друг от друга, поэтому картинки достаются
+   * пачками (потолок задаёт стратегия через PageContext.maxParallelPages):
+   * тридцать постов больше не означают тридцать последовательных задержек
+   * сети. Порядок записей при этом сохраняется.
    */
-  async reextractImages(id: string, link?: string): Promise<string[] | null> {
-    // Без skipIds: цель — НАЙТИ запись в фиде, а не отбросить обработанные.
-    const entries = await this.fetch();
-    const match = entries.find(entry => entry.id === id);
+  async fetch(options?: FetchOptions): Promise<FeedEntry[]> {
+    const { skipIds } = options ?? {};
+    const items = await this.load();
 
-    if (match) {
-      return match.imageUrls;
-    }
+    const resolved = await Promise.all(
+      items.map(item => this.resolve(item, skipIds))
+    );
 
-    if (!link) {
-      return null;
-    }
-
-    const extractFromUrl = this.options.imageExtractor.extractFromUrl;
-
-    if (!extractFromUrl) {
-      return null;
-    }
-
-    const fromPage = await extractFromUrl.call(this.options.imageExtractor, link);
-
-    return fromPage.length > 0 ? fromPage : null;
+    return resolved.filter((entry): entry is FeedEntry => entry !== null);
   }
 
-  private async toFeedEntry(
-    item: AtomItem,
+  async imagesForPost(link: string): Promise<string[]> {
+    return this.options.strategy.imagesFromUrl?.(link) ?? [];
+  }
+
+  async postText(link: string): Promise<string> {
+    return this.options.strategy.postText?.(link) ?? '';
+  }
+
+  /** Загрузка и разбор фида. Ошибка пробрасывается: без фида источника нет. */
+  private async load(): Promise<FeedItem[]> {
+    const { feedUrl, timeoutMs, userAgent } = this.options;
+    const xml = await fetchText(feedUrl, { timeoutMs, userAgent });
+    const feed = await this.parser.parseString(xml);
+
+    return feed.items as FeedItem[];
+  }
+
+  /**
+   * Запись → запись конвейера либо null, если в сообщение её нечего слать.
+   *
+   * null — это штатный исход, а не ошибка: так отсеиваются чужие разделы
+   * фида, уже обработанные посты и записи без обязательной картинки.
+   */
+  private async resolve(
+    item: FeedItem,
     skipIds?: ReadonlySet<string>
   ): Promise<FeedEntry | null> {
-    // Atom использует <id>, RSS/RDF (как LOR) — <guid>.
-    const rawId = item.guid?.trim() ?? item.id?.trim();
-    const title = item.title?.trim();
-    const link = item.link?.trim();
+    const { includeFilter, requireImages, strategy } = this.options;
 
-    if (!rawId || !title || !link) {
+    // Уже обработанные и не проходящие фильтр записи отбрасываются ДО
+    // извлечения картинок: у части стратегий это ходит на страницу поста, и
+    // без раннего выхода каждый опрос оплачивал бы десятки лишних HTTP-запросов
+    // к чужому сайту ради постов, которые конвейер всё равно отбросил бы.
+    if (skipIds?.has(itemEntryId(this.sourceId, item) ?? '')) {
       return null;
     }
 
-    const id = `${this.sourceId}:${rawId}`;
-
-    if (skipIds?.has(id)) {
+    if (includeFilter && !includeFilter.matches(item.title ?? '')) {
       return null;
     }
 
-    const imageUrls = await this.options.imageExtractor.extract(item);
+    let images: string[] = [];
 
-    if (this.options.requireImages && imageUrls.length === 0) {
-      return null;
+    try {
+      images = await strategy.images(item);
+    } catch (error) {
+      // Ошибка разбора не должна ронять весь опрос источника. То, что
+      // удалось вытащить, отдаётся как есть; если не вышло ничего — запись
+      // уйдёт в null по правилу requireImages.
+      images = [];
+
+      this.options.onStrategyError?.(error);
     }
 
-    const content = normalizeText(this.options.extractDescription(item));
-
-    const published = itemPublished(item);
-    const updated = itemUpdated(item, published);
-
-    return {
-      id,
-      sourceId: this.sourceId,
-      title,
-      link,
-      author: getAuthor(item.author, item.creator),
-      content,
-      published,
-      updated,
-      imageUrls
-    };
+    return toFeedEntry(this.sourceId, item, {
+      images,
+      description: strategy.description(item),
+      requireImages
+    });
   }
 }

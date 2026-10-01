@@ -1,75 +1,75 @@
-# Список источников бота.
+# Источники бота. Единственное место настройки источников: `.env` для секретов,
+# этот файл — для всего остального. Обязательные поля помечены ниже; лишнее
+# поле в YAML — ошибка при старте, а не тихая замена настройки.
 #
-# Добавить источник  — добавить блок в этот список.
-# Удалить источник    — удалить блок (или поставить enabled: false).
-# Настроить источник  — поменять поля блока и перезапустить бота.
-#
-# ВНИМАНИЕ: этот файл читается ТОЛЬКО при старте. Команды /template reload
-# и /ai reload перечитывают шаблоны и AI-промпт, но не sources.yml.
-# Для правки url/интервалов/enrich нужен рестарт (pm2 restart vk-feed-bot).
-#
-# Поля:
-#   id               уникальный идентификатор (a-z0-9-_), используется в БД и командах
-#   name             человекочитаемое имя для логов (опционально, по умолчанию = id)
-#   type             тип адаптера; сейчас поддерживается только "rss"
-#   enabled          включён ли источник
-#   url              URL RSS/Atom фида
-#   requireImages    true — посты без картинок пропускаются (напр. "скриншотные" источники)
-#   imageExtractor   "none" | "lor" | "pingvinus" | ваш собственный ключ (см. src/registries.ts)
-#                    ключ выбирает сразу две стратегии сайта: разбор URL картинок
-#                    И вырезание блоков картинок/тегов из описания
-#   includePattern   (опционально) regexp по ссылке на пост. В источник попадут
-#                    только совпавшие записи — удобно, когда один фид на все
-#                    рубрики, напр. "^https://pingvinus\.ru/gallery/"
-#   fallbackTextLimit (опционально) длина текста автора в сообщении, когда
-#                    AI-комментарий получить не удалось. Текст укорачивается
-#                    по границе слова, без разрезания последнего
-#   enrich           "none" | "openrouter" | ваш собственный ключ
-#   template         путь к YAML-шаблону сообщения
-#   pollIntervalMs   интервал опроса (опционально, иначе DEFAULT_POLL_INTERVAL_MS из .env)
-#   requestTimeoutMs таймаут запроса фида (опционально, иначе DEFAULT_REQUEST_TIMEOUT_MS)
-#   promptPath       свой промпт для enrich: openrouter (опционально, иначе глобальный)
-#
-#   "lor" дополнительно догружает страницу поста, потому что RSS
-#   linux.org.ru содержит только первую картинку галереи, а скриншотов
-#   в посте обычно несколько. Результат разбора кешируется по id поста.
-#
-#   "pingvinus" тоже ходит на страницу поста: в его RSS описание у
-#   скриншотов пустое, а картинка и текст живут только на странице.
+# Все поля описаны в README, раздел «Источники».
 
 sources:
-  - id: forum
-    name: Manjaro RU Atom
+  # ─── linux.org.ru: свежие темы форума ──────────────────────────────────────
+  # RSS кладёт в описание только ПЕРВУЮ картинку галереи, остальные стратегия
+  # догружает со страницы поста (стратегия `lor`).
+  - id: lor
+    name: Linux.org.ru
     type: rss
-    enabled: true
-    url: https://manjaro.ru/atom
-    requireImages: false
-    imageExtractor: none
-    enrich: none
-    template: templates/forum_post.yml
-
-  - id: screenshots
-    name: LOR Screenshots
-    type: rss
+    site: lor
     enabled: true
     url: https://www.linux.org.ru/section-rss.jsp?section=3
     requireImages: true
-    imageExtractor: lor
-    # Если AI не ответил — короткая выжимка текста автора по границе слова.
-    fallbackTextLimit: 200
+    # Темы без картинок в ленте новостей теряли бы смысл, но у форума картинка —
+    # часть поста, поэтому запись без неё отбрасывается.
     enrich: openrouter
-    template: templates/screenshot_post.yml
+    textMode: generated
+    textLimit: 200
+    template: templates/forum_post.yml
+    # Обёртка запроса задачу не задаёт: она передаёт модели только заголовок,
+    # автора и текст поста. Пока задача у LOR и Pingvinus одна и та же —
+    # добродушно подколоть автора, — промпт общий. Задачи разойдутся:
+    # положите рядом свой .txt и укажите его здесь.
+    promptPath: templates/ai_comment.txt
+    pollIntervalMs: 300000
+    requestTimeoutMs: 30000
 
+  # ─── pingvinus.ru: посты-скриншоты ──────────────────────────────────────────
+  # В RSS описание ПУСТОЕ, весь текст на странице поста. `textLimit` здесь —
+  # fallback на случай, если OpenRouter не ответил и текст пришлось брать с
+  # страницы: длинный пост в чате неуместен, обрезается по границе слова.
   - id: pingvinus
-    name: Pingvinus Screenshots
+    name: Pingvinus
     type: rss
+    site: pingvinus
     enabled: true
     url: https://pingvinus.ru/rss.xml
     requireImages: true
-    imageExtractor: pingvinus
-    # В фиде смешаны новости, заметки и скриншоты — берём только скриншоты.
-    includePattern: '^https://pingvinus\.ru/gallery/'
-    # Если AI не ответил — короткая выжимка текста автора по границе слова.
-    fallbackTextLimit: 200
     enrich: openrouter
+    textMode: generated
+    textLimit: 200
     template: templates/screenshot_post.yml
+    promptPath: templates/ai_comment.txt
+    pollIntervalMs: 300000
+    requestTimeoutMs: 30000
+
+  # ─── manjaro.ru: анонсы обновлений ─────────────────────────────────────────
+  # В один Atom-фид свалены анонсы обновлений и обычные новости.
+  # `includeFilter` пропускает в ленту только анонсы, а `generateWhen`
+  # включает AI — только для них: переводить новости не нужно.
+  # Шаблоны regexp обязаны быть в ОДИНАРНЫХ кавычках: в двойных кавычках YAML
+  # съедает обратный слэш и `\[` превращается в битый шаблон.
+  - id: manjaro
+    name: Manjaro Update
+    type: rss
+    site: none
+    enabled: true
+    url: https://manjaro.ru/atom
+    requireImages: false
+    enrich: openrouter
+    textMode: feed
+    textLimit: 200
+    # Анонс — обычный пост форума с заголовком, автором и ссылкой, поэтому
+    # шаблон тот же, что у LOR. Свой шаблон заводится рядом и подключается
+    # здесь, если понадобится другое оформление.
+    template: templates/forum_post.yml
+    promptPath: templates/announce_translation.txt
+    pollIntervalMs: 600000
+    requestTimeoutMs: 30000
+    #includeFilter: '^\[(Stable|Testing|Unstable) Update\]'
+    generateWhen: '^\[(Stable|Testing|Unstable) Update\]'

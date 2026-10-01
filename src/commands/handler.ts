@@ -1,12 +1,17 @@
 import type { Context } from 'vk-io';
 
-import type { OpenRouterEnricher } from '../enrich/openrouter-enricher.js';
-import type { BotDatabase } from '../db/database.js';
+import type { BotDatabase, StoredEntry } from '../db/database.js';
 import type { Logger } from '../logger/logger.js';
 import type { Scheduler } from '../pipeline/scheduler.js';
 import type { SourcePipeline } from '../pipeline/source-pipeline.js';
 import type { TemplateManager } from '../templates/manager.js';
 import { toMessage } from '../utils/to-message.js';
+import type { AiSource } from '../registries.js';
+import {
+  formatEntryList,
+  formatListFooter,
+  parseListLimit
+} from './source-entries.js';
 
 export interface CommandHandlerOptions {
   db: BotDatabase;
@@ -16,10 +21,25 @@ export interface CommandHandlerOptions {
   logger: Logger;
   adminChat: number;
   ownerId: number;
-  openRouterEnricher: OpenRouterEnricher | null;
+  /** Задан ли OPENROUTER_API_KEY: от этого зависит ответ `/ai`. */
+  aiConfigured: boolean;
+  /** Источники с генерацией: показываются в `/ai status`, у каждого свой промпт. */
+  aiSources: AiSource[];
 }
 
 export class CommandHandler {
+  /**
+   * Последний показанный список записей по источникам.
+   *
+   * Номера в списке — не свойство базы, а позиция в момент показа. Между
+   * `/source posts` и `/source resend` опрос может успеть дослать новый пост и
+   * сдвинуть нумерацию, и админ переслал бы не тот пост, который выбрал. Поэтому
+   * выбор идёт по сохранённому снимку, а не по свежей выборке. Снимок живёт до
+   * рестарта: потерянный список — не страховка от ошибки, а просьба показать
+   * его заново.
+   */
+  private readonly listings = new Map<string, StoredEntry[]>();
+
   constructor(private readonly opts: CommandHandlerOptions) {}
 
   async handle(ctx: Context): Promise<void> {
@@ -85,6 +105,8 @@ export class CommandHandler {
         '',
         '/source list — список источников и их статус',
         '/source check ID — проверить источник сейчас',
+        '/source posts ID [N] — показать последние посты источника (по умолчанию 10)',
+        '/source resend ID N — повторно отправить пост №N из показанного списка',
         '/source resend-last ID — повторно отправить последний пост источника',
         '/source enable ID — включить источник',
         '/source disable ID — выключить источник',
@@ -172,6 +194,62 @@ export class CommandHandler {
         return;
       }
 
+      case 'posts': {
+        const pipeline = this.getPipeline(id);
+        const limit = parseListLimit(args[2]);
+        const entries = pipeline.listRecent(limit);
+
+        if (entries.length === 0) {
+          await ctx.send(`В базе нет записей источника "${id}".`);
+          return;
+        }
+
+        this.listings.set(pipeline.sourceId, entries);
+
+        await ctx.send(
+          [
+            `📰 Посты источника "${pipeline.sourceName}"`,
+            '',
+            ...formatEntryList(entries),
+            '',
+            formatListFooter(entries)
+          ].join('\n')
+        );
+        return;
+      }
+
+      case 'resend': {
+        const pipeline = this.getPipeline(id);
+        const number = Number(args[2]);
+
+        if (!Number.isInteger(number) || number < 1) {
+          throw new Error('Укажи номер поста: /source resend ID N');
+        }
+
+        const listed = this.listings.get(pipeline.sourceId);
+
+        if (!listed) {
+          throw new Error(
+            `Сначала покажи посты: /source posts ${pipeline.sourceId}`
+          );
+        }
+
+        const chosen = listed[number - 1];
+
+        if (!chosen) {
+          throw new Error(
+            `В показанном списке нет поста №${number}. ` +
+              `Доступно: 1–${listed.length}. Повтори: /source posts ${pipeline.sourceId}`
+          );
+        }
+
+        await ctx.send(`🔄 Отправляю пост №${number} — "${chosen.entry.title}"`);
+        await pipeline.resend(chosen.entry);
+
+        await ctx.send(`✅ Пост отправлен:\n${chosen.entry.title}`);
+        return;
+      }
+
       case 'resend-last': {
         const pipeline = this.getPipeline(id);
         await ctx.send(`🔄 Получаю последний пост "${id}"...`);
@@ -204,6 +282,8 @@ export class CommandHandler {
           'Использование:\n' +
             '/source list\n' +
             '/source check ID\n' +
+            '/source posts ID [N]\n' +
+            '/source resend ID N\n' +
             '/source resend-last ID\n' +
             '/source enable ID\n' +
             '/source disable ID'
@@ -211,34 +291,80 @@ export class CommandHandler {
     }
   }
 
+  /**
+   * `/ai status` и `/ai reload`.
+   *
+   * Промпт принадлежит ИСТОЧНИКУ, а не боту: у анонсов и скриншотов разные
+   * задачи для модели. Поэтому статус перечисляет источники, а reload
+   * перечитывает промпты у всех — общий промпт у бота не существует.
+   */
   private async aiCommand(ctx: Context, args: string[]): Promise<void> {
-    if (!this.opts.openRouterEnricher) {
+    if (!this.opts.aiConfigured) {
       await ctx.send('AI (OpenRouter) не настроен: нет OPENROUTER_API_KEY.');
       return;
     }
 
     switch (args[0]) {
       case 'status':
-        await ctx.send(
-          [
-            '🤖 AI',
-            '',
-            `Модель: ${this.opts.openRouterEnricher.getModelName()}`,
-            `ID: ${this.opts.openRouterEnricher.getModel()}`,
-            `Промпт: ${this.opts.openRouterEnricher.getPromptPath()}`
-          ].join('\n')
-        );
+        await ctx.send(this.aiStatus());
         return;
 
-      case 'reload':
-        await this.opts.openRouterEnricher.loadPrompt();
-        await ctx.send('✅ AI-промпт перечитан.');
-        this.opts.logger.info(`AI prompt reloaded by ${ctx.senderId}.`);
+      case 'reload': {
+        // Ошибка одного промпта не должна оставлять источник с прошлой версией
+        // молча: перечитываем все и показываем, что вышло.
+        const failures: string[] = [];
+
+        for (const source of this.opts.aiSources) {
+          try {
+            await source.reloadPrompt();
+          } catch (error) {
+            failures.push(`${source.sourceId}: ${toMessage(error)}`);
+          }
+        }
+
+        this.opts.logger.info(
+          `AI prompts reloaded by ${ctx.senderId}: ${this.opts.aiSources.length - failures.length}/${this.opts.aiSources.length} ok.`
+        );
+
+        await ctx.send(
+          failures.length > 0
+            ? [
+                `⚠️ Промпты перечитаны с ошибками (${failures.length}):`,
+                ...failures.map(failure => `  - ${failure}`)
+              ].join('\n')
+            : `✅ Промпты перечитаны: ${this.opts.aiSources.length}.`
+        );
         return;
+      }
 
       default:
         await ctx.send('Использование:\n/ai status\n/ai reload');
     }
+  }
+
+  /** Список источников с генерацией: у каждого своя модель и свой промпт. */
+  private aiStatus(): string {
+    const sources = this.opts.aiSources;
+
+    if (sources.length === 0) {
+      return '🤖 AI настроен, но ни один источник его не использует.\nПроверьте enrich в config/sources.yml.';
+    }
+
+    const model = sources[0];
+    const lines = [
+      '🤖 AI',
+      '',
+      `Модель: ${model?.modelName}`,
+      `ID: ${model?.model}`,
+      '',
+      'Промпты по источникам:'
+    ];
+
+    for (const source of sources) {
+      lines.push(`  ${source.sourceName} (${source.sourceId}) — ${source.promptPath}`);
+    }
+
+    return lines.join('\n');
   }
 
   private async admin(ctx: Context, args: string[]): Promise<void> {
