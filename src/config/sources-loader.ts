@@ -207,10 +207,28 @@ function checkConsistency(
   }
 
   if (source.textMode === 'generated' && source.generateWhen) {
-    issues.push(
-      `  - ${path}: textMode "generated" already generates every post, so ` +
-        'generateWhen has no effect — drop one of them'
-    );
+    /*
+     * Сообщение обязано называть КАКОЕ поле убрать. Формулировка «убери одно из
+     * двух» оставляла выбор админу, и для manjarо оба варианта выглядели
+     * равнозначными, хотя правильный там ровно один.
+     *
+     * Если generateWhen повторяет includeFilter, выбор однозначен: посты, дошедшие
+     * до конвейера, и так все подходят, поэтому нужен generated, а generateWhen —
+     * тот же regexp вторым разом.
+     */
+    if (source.includeFilter === source.generateWhen) {
+      issues.push(
+        `  - ${path}.generateWhen: repeats includeFilter, so every post that ` +
+          'reaches the pipeline already matches it — drop generateWhen and ' +
+          'keep textMode: "generated"'
+      );
+    } else {
+      issues.push(
+        `  - ${path}: textMode "generated" generates every post, so ` +
+          'generateWhen has no effect. Keep textMode: "generated" and drop ' +
+          'generateWhen, or switch textMode to "feed" and keep generateWhen'
+      );
+    }
   }
 
   if (source.textMode !== 'generated' && !source.generateWhen) {

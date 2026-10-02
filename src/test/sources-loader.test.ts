@@ -263,7 +263,7 @@ describe('sources-loader: согласованность', () => {
     assert.match(message, /\.promptPath: is required when enrich is "openrouter"/);
   });
 
-  it('generated вместе с generateWhen — избыточно', async () => {
+  it('generated вместе с generateWhen — избыточно, и сказано КАКОЕ убрать', async () => {
     const message = await loadExpectingError([
       validSource({
         enrich: 'openrouter',
@@ -273,11 +273,29 @@ describe('sources-loader: согласованность', () => {
       })
     ]);
 
-    assert.match(message, /drop one of them/);
+    assert.match(message, /Keep textMode: "generated" and drop generateWhen/);
+    assert.match(message, /switch textMode to "feed" and keep generateWhen/);
+  });
+
+  it('generateWhen, повторяющий includeFilter, — прямое указание убрать его', async () => {
+    // Так был настроен manjaro: два одинаковых regexp и generated. Сообщение
+    // обязано называть поле, а не предлагать выбрать: правильный вариант один.
+    const message = await loadExpectingError([
+      validSource({
+        enrich: 'openrouter',
+        promptPath: 't.txt',
+        textMode: 'generated',
+        includeFilter: '^\\[Stable Update\\]',
+        generateWhen: '^\\[Stable Update\\]'
+      })
+    ]);
+
+    assert.match(message, /repeats includeFilter/);
+    assert.match(message, /drop generateWhen and keep textMode: "generated"/);
   });
 
   it('feed + generateWhen — рабочая схема выборочной генерации', async () => {
-    // Именно так настроен manjaro: анонсы переводятся, новости идут как есть.
+    // Выборочная генерация: анонсы переводятся, новости идут как есть.
     const [source] = await load([
       validSource({
         enrich: 'openrouter',

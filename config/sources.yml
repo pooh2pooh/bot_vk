@@ -50,8 +50,10 @@ sources:
 
   # ─── manjaro.ru: анонсы обновлений ─────────────────────────────────────────
   # В один Atom-фид свалены анонсы обновлений и обычные новости.
-  # `includeFilter` пропускает в ленту только анонсы, а `generateWhen`
-  # включает AI — только для них: переводить новости не нужно.
+  # `includeFilter` пропускает в ленту только анонсы — этого достаточно:
+  # новости в конвейер не попадают, а `textMode: generated` переводит всё, что
+  # дошло. `generateWhen` здесь был бы тем же самым regexp вторым разом, и такой
+  # тандем с `generated` бот считает противоречием и отказывается стартовать.
   # Шаблоны regexp обязаны быть в ОДИНАРНЫХ кавычках: в двойных кавычках YAML
   # съедает обратный слэш и `\[` превращается в битый шаблон.
   - id: manjaro
@@ -62,7 +64,7 @@ sources:
     url: https://manjaro.ru/atom
     requireImages: false
     enrich: openrouter
-    textMode: feed
+    textMode: generated
     textLimit: 200
     # Анонс — обычный пост форума с заголовком, автором и ссылкой, поэтому
     # шаблон тот же, что у LOR. Свой шаблон заводится рядом и подключается
@@ -71,5 +73,4 @@ sources:
     promptPath: templates/announce_translation.txt
     pollIntervalMs: 600000
     requestTimeoutMs: 30000
-    #includeFilter: '^\[(Stable|Testing|Unstable) Update\]'
-    generateWhen: '^\[(Stable|Testing|Unstable) Update\]'
+    includeFilter: '^\[(Stable|Testing|Unstable) Update\]'
