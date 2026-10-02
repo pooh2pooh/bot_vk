@@ -33,6 +33,17 @@ export interface SourcePipelineOptions {
    * Остальные посты уходят в режиме `textMode`.
    */
   generateWhen?: Filter;
+
+  /**
+   * Заголовки, которые вообще принадлежат этому источнику.
+   *
+   * Применяется и при отправке, и при чтении из базы — второе важно: записи,
+   * попавшие в базу под прежней конфигурацией, фильтру не соответствуют.
+   * Добавление или смена `includeFilter` не переписывает историю, поэтому без
+   * проверки на чтении `resend` способен выдать пост чужого источника — и
+   * выдать его второй раз, если этот пост теперь забирает другой источник.
+   */
+  includeFilter?: Filter;
 }
 
 /** Запись, подготовленная к отправке. */
@@ -135,9 +146,16 @@ export class SourcePipeline {
     return ordered.length;
   }
 
-  /** Записи источника, свежие сверху, вместе с состоянием — для выбора поста. */
+  /**
+   * Записи источника, свежие сверху, вместе с состоянием — для выбора поста.
+   *
+   * База отдаёт всё, что записала за историю работы бота, поэтому отбор по
+   * текущему `includeFilter` делается здесь: конфиг — источник истины о
+   * принадлежности поста источнику, а база лишь кэш, который этому конфигу
+   * мог устареть.
+   */
   listRecent(limit: number): StoredEntry[] {
-    return this.options.db.listRecentEntries(this.sourceId, limit);
+    return this.ownEntries(this.options.db.listEntries(this.sourceId)).slice(0, limit);
   }
 
   /**
@@ -148,13 +166,29 @@ export class SourcePipeline {
    * деталях вывода и подготовки.
    */
   async resendLatest(): Promise<FeedEntry> {
-    const latest = this.options.db.getLatestEntry(this.sourceId);
+    const [latest] = this.listRecent(1);
 
     if (!latest) {
-      throw new Error(`Feed contains no saved entries (${this.sourceName}).`);
+      throw new Error(
+        this.options.includeFilter
+          ? `Feed has no entries matching includeFilter (${this.sourceName}).`
+          : `Feed contains no saved entries (${this.sourceName}).`
+      );
     }
 
-    return this.resend(latest);
+    return this.resend(latest.entry);
+  }
+
+  /**
+   * Оставляет только записи, которые этому источнику сейчас принадлежат.
+   *
+   * Без `includeFilter` источник забирает фид целиком, и его собственные записи
+   * отбрасывать нечем.
+   */
+  private ownEntries(rows: StoredEntry[]): StoredEntry[] {
+    const filter = this.options.includeFilter;
+
+    return filter ? rows.filter(row => filter.matches(row.entry.title)) : rows;
   }
 
   /**

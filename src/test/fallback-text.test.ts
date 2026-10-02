@@ -48,7 +48,8 @@ function harness(options: {
   const rendered: string[] = [];
 
   const db = {
-    getLatestEntry: () => options.entry ?? entry(),
+    // `resendLatest` берёт первую запись списка, а не отдельный запрос.
+    listEntries: () => [{ entry: options.entry ?? entry(), state: 'sent' }],
     markSent: () => undefined,
     updateEntryImages: () => undefined
   } as unknown as BotDatabase;

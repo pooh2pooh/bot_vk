@@ -56,7 +56,7 @@ sources:
   # тандем с `generated` бот считает противоречием и отказывается стартовать.
   # Шаблоны regexp обязаны быть в ОДИНАРНЫХ кавычках: в двойных кавычках YAML
   # съедает обратный слэш и `\[` превращается в битый шаблон.
-  - id: manjaro
+  - id: manjaro-news
     name: Manjaro Update
     type: rss
     site: none
@@ -74,3 +74,32 @@ sources:
     pollIntervalMs: 600000
     requestTimeoutMs: 30000
     includeFilter: '^\[(Stable|Testing|Unstable) Update\]'
+
+  # ─── manjaro.ru: всё, кроме анонсов обновлений ───────────────────────────
+  # Второй источник с ТОГО ЖЕ фида, что и manjaro выше. Анонсы обновлений уже
+  # забирает первый источник, поэтому этот отбирает только остальное: обычные
+  # новости и обсуждения.
+  #
+  # includeFilter умеет только включать, поэтому «всё кроме» выражено
+  # отрицательным lookahead. Он ОБЯЗАН быть точной противоположностью
+  # includeFilter источника manjaro: если здесь расширить класс внутри скобок
+  # до `Unstable|Testing`, анонсы начнут приходить в оба источника и уйдут в чат
+  # дважды. Сейчас на живом фиде: 12 под анонсы, 38 сюда, всего 50 — без
+  # пересечений и пробелов.
+  #
+  # Без ИИ (`enrich: none`) и с обрезкой до textLimit символов: новости не
+  # требуют перевода или пересказа, их читают как есть.
+  - id: manjaro
+    name: Manjaro Posts
+    type: rss
+    site: none
+    enabled: true
+    url: https://manjaro.ru/atom
+    requireImages: false
+    enrich: none
+    textMode: feed
+    textLimit: 200
+    template: templates/forum_post.yml
+    pollIntervalMs: 600000
+    requestTimeoutMs: 30000
+    includeFilter: '^(?!\[(?:Stable|Testing|Unstable) Update\])'

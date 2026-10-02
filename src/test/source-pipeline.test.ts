@@ -44,7 +44,9 @@ function harness(options: {
   textMode?: TextMode;
   textLimit?: number;
   generateWhen?: Filter;
-  /** Что вернёт `db.listRecentEntries`. */
+  /** Кого этот источник считает своими постами. */
+  includeFilter?: Filter;
+  /** Что вернёт `db.listEntries`. */
   recent?: StoredEntry[];
 }) {
   const sent: { message: string; imageUrls: string[] }[] = [];
@@ -55,8 +57,10 @@ function harness(options: {
   const infos: string[] = options.captureInfo ?? [];
 
   const db = {
-    getLatestEntry: () => options.entry ?? STORED,
-    listRecentEntries: () => options.recent ?? [],
+    // `resendLatest` берёт первую запись того же списка, что и `/source posts`,
+    // поэтому запись, заданная через `entry`, обязана быть видна и в списке.
+    listEntries: () =>
+      options.recent ?? [{ entry: options.entry ?? STORED, state: 'sent' as const }],
     markSent: (id: string) => {
       sentIds.push(id);
     },
@@ -116,7 +120,8 @@ function harness(options: {
     targetChat: 1,
     textMode: options.textMode ?? 'generated',
     textLimit: options.textLimit ?? 200,
-    generateWhen: options.generateWhen
+    generateWhen: options.generateWhen,
+    includeFilter: options.includeFilter
   });
 
   return { pipeline, sent, updates, warnings, errors, infos, sentIds };
@@ -479,12 +484,61 @@ describe('listRecent: выборка постов для /source posts', () => {
     assert.equal(result[0]?.state, 'sent');
   });
 
-  it('limit передаётся в базу без изменений', async () => {
-    const h = harness({ recent: [] });
+  it('отсекает по limit уже после отбора по фильтру', () => {
+    const listed: StoredEntry[] = [1, 2, 3, 4, 5].map(index => ({
+      entry: { ...STORED, id: `lor:${index}`, title: `Пост ${index}` },
+      state: 'sent' as const
+    }));
+    const h = harness({
+      recent: listed,
+      includeFilter: compileFilter('^(?:Пост [135])$', 'test.include')
+    });
 
-    h.pipeline.listRecent(7);
+    const result = h.pipeline.listRecent(2);
 
-    assert.ok(h.pipeline, 'выборка не бросила исключения');
+    assert.deepEqual(result.map(row => row.entry.id), ['lor:1', 'lor:3']);
+  });
+
+  /*
+   * Регрессия: записи, попавшие в базу под прежней конфигурацией, фильтру
+   * не соответствуют. Без отбора на чтении `resend` выдавал пост чужого
+   * источника — и выдавал его второй раз, если пост теперь забирает другой
+   * источник. Именно так `/source resend-last manjaro` и
+   * `/source resend-last manjaro-news` слали один и тот же пост.
+   */
+  it('не показывает записи, не проходящие текущий includeFilter', () => {
+    const stale = { ...STORED, id: 'manjaro:.../d/207/45', title: 'Привет, ИИ' };
+    const own = { ...STORED, id: 'manjaro:.../d/207/46', title: '[Stable Update] ядро 6.1' };
+    const h = harness({
+      recent: [
+        { entry: stale, state: 'sent' },
+        { entry: own, state: 'sent' }
+      ],
+      includeFilter: compileFilter(
+        '^\\[(?:Stable|Testing|Unstable) Update\\]',
+        'test.include'
+      )
+    });
+
+    const result = h.pipeline.listRecent(10);
+
+    assert.deepEqual(result.map(row => row.entry.id), [own.id]);
+  });
+
+  it('resendLatest берёт запись того же отсортированного списка', async () => {
+    const stale = { ...STORED, id: 'manjaro:.../d/207/45', title: 'Привет, ИИ' };
+    const own = { ...STORED, id: 'manjaro:.../d/207/46', title: '[Stable Update] ядро 6.1' };
+    const h = harness({
+      recent: [
+        { entry: stale, state: 'sent' },
+        { entry: own, state: 'sent' }
+      ],
+      includeFilter: compileFilter('^\\[Stable Update\\]', 'test.include')
+    });
+
+    const resent = await h.pipeline.resendLatest();
+
+    assert.equal(resent.id, own.id);
   });
 
   it('пустая база даёт пустой список, а не ошибку', async () => {

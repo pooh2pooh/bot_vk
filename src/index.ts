@@ -95,6 +95,11 @@ async function main(): Promise<void> {
               sourceConfig.generateWhen,
               `${sourceConfig.id}.generateWhen`
             )
+          : undefined,
+        // Тот же принцип: компилируется один раз и переиспользуется при
+        // отправке и при чтении списка постов из базы.
+        includeFilter: sourceConfig.includeFilter
+          ? compileFilter(sourceConfig.includeFilter, `${sourceConfig.id}.includeFilter`)
           : undefined
       })
     );

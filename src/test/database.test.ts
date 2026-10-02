@@ -81,13 +81,13 @@ describe('BotDatabase: учёт обработанных записей', () => 
 
 
 /**
- * Выборка последних записей для `/source posts`.
+ * Выборка записей для `/source posts` и `/source resend`.
  *
- * Ключевое здесь — совпадение порядка с `getLatestEntry`. Если бы они
- * разошлись, «пост №1» в списке и «последний пост» оказались бы разными
- * записями, и это выглядело бы как баг, который невозможно диагностировать.
+ * Ключевое здесь — метод один. Пока их было два с продублированным `ORDER BY`,
+ * «пост №1» в списке и «последний пост» могли разъехаться, и это выглядело бы
+ * как баг, который невозможно диагностировать.
  */
-describe('BotDatabase: listRecentEntries', () => {
+describe('BotDatabase: listEntries', () => {
   function sourceDb(name: string): BotDatabase {
     return new BotDatabase(tempDbPath(name));
   }
@@ -103,7 +103,7 @@ describe('BotDatabase: listRecentEntries', () => {
     db.addFeedEntry(withId('lor:new', '2026-10-01T10:00:00.000Z'));
     db.addFeedEntry(withId('lor:mid', '2026-09-15T10:00:00.000Z'));
 
-    const listed = db.listRecentEntries('lor', 10);
+    const listed = db.listEntries('lor');
 
     assert.deepEqual(
       listed.map(stored => stored.entry.id),
@@ -112,17 +112,18 @@ describe('BotDatabase: listRecentEntries', () => {
     db.close();
   });
 
-  it('первая запись списка совпадает с getLatestEntry', () => {
-    const db = sourceDb('recent-latest');
+  it('порядок устойчив при одинаковой дате', () => {
+    const db = sourceDb('recent-tie');
 
-    db.addFeedEntry(withId('lor:a', '2026-09-01T10:00:00.000Z'));
+    db.addFeedEntry(withId('lor:a', '2026-10-01T10:00:00.000Z'));
     db.addFeedEntry(withId('lor:b', '2026-10-01T10:00:00.000Z'));
-    db.addFeedEntry(withId('lor:c', '2026-09-20T10:00:00.000Z'));
+    db.addFeedEntry(withId('lor:c', '2026-10-01T10:00:00.000Z'));
 
-    const latest = db.getLatestEntry('lor');
-    const [first] = db.listRecentEntries('lor', 10);
+    const first = db.listEntries('lor').map(stored => stored.entry.id);
+    const second = db.listEntries('lor').map(stored => stored.entry.id);
 
-    assert.equal(first?.entry.id, latest?.id);
+    assert.deepEqual(first, ['lor:a', 'lor:b', 'lor:c']);
+    assert.deepEqual(first, second);
     db.close();
   });
 
@@ -132,14 +133,14 @@ describe('BotDatabase: listRecentEntries', () => {
     db.addFeedEntry(withId('lor:1', '2026-10-01T10:00:00.000Z'));
     db.addFeedEntry(withId('pingvinus:1', '2026-10-02T10:00:00.000Z', 'pingvinus'));
 
-    const listed = db.listRecentEntries('lor', 10);
+    const listed = db.listEntries('lor');
 
     assert.equal(listed.length, 1);
     assert.equal(listed[0]?.entry.id, 'lor:1');
     db.close();
   });
 
-  it('limit ограничивает количество, а не источник', () => {
+  it('отдаёт все записи источника, а не только первые', () => {
     const db = sourceDb('recent-limit');
 
     for (let index = 1; index <= 5; index++) {
@@ -148,8 +149,10 @@ describe('BotDatabase: listRecentEntries', () => {
       );
     }
 
-    assert.equal(db.listRecentEntries('lor', 3).length, 3);
-    assert.equal(db.listRecentEntries('lor', 10).length, 5);
+    // Отсечку по количеству делает пайплайн после отбора по includeFilter: у
+    // источника, у которого фильтруется большая часть истории, ранняя отсечка
+    // вернула бы пустой список вместо последнего поста.
+    assert.equal(db.listEntries('lor').length, 5);
     db.close();
   });
 
@@ -164,7 +167,7 @@ describe('BotDatabase: listRecentEntries', () => {
     db.markIgnored('lor:skipped');
 
     const states = new Map(
-      db.listRecentEntries('lor', 10).map(stored => [stored.entry.id, stored.state])
+      db.listEntries('lor').map(stored => [stored.entry.id, stored.state])
     );
 
     assert.equal(states.get('lor:sent'), 'sent');
@@ -179,11 +182,11 @@ describe('BotDatabase: listRecentEntries', () => {
     db.addFeedEntry(withId('lor:1', '2026-10-01T10:00:00.000Z'));
     db.markIgnored('lor:1');
 
-    assert.equal(db.listRecentEntries('lor', 1)[0]?.state, 'skipped');
+    assert.equal(db.listEntries('lor')[0]?.state, 'skipped');
 
     db.markSent('lor:1');
 
-    assert.equal(db.listRecentEntries('lor', 1)[0]?.state, 'sent');
+    assert.equal(db.listEntries('lor')[0]?.state, 'sent');
     db.close();
   });
 
@@ -192,7 +195,7 @@ describe('BotDatabase: listRecentEntries', () => {
 
     db.addFeedEntry(withId('lor:1', '2026-10-01T10:00:00.000Z'));
 
-    assert.deepEqual(db.listRecentEntries('manjaro', 10), []);
+    assert.deepEqual(db.listEntries('manjaro'), []);
     db.close();
   });
 
@@ -204,7 +207,7 @@ describe('BotDatabase: listRecentEntries', () => {
       imageUrls: ['https://example.org/1.png', 'https://example.org/2.png']
     });
 
-    assert.deepEqual(db.listRecentEntries('lor', 1)[0]?.entry.imageUrls, [
+    assert.deepEqual(db.listEntries('lor')[0]?.entry.imageUrls, [
       'https://example.org/1.png',
       'https://example.org/2.png'
     ]);
@@ -217,7 +220,7 @@ describe('BotDatabase: listRecentEntries', () => {
     db.addFeedEntry(withId('lor:1', '2026-10-01T10:00:00.000Z'));
     db.updateEntryImages('lor:1', []);
 
-    const listed = db.listRecentEntries('lor', 1);
+    const listed = db.listEntries('lor');
 
     assert.equal(listed[0]?.entry.id, 'lor:1');
     assert.deepEqual(listed[0]?.entry.imageUrls, []);

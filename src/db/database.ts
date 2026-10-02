@@ -13,6 +13,15 @@ import type { Admin, FeedEntry } from '../core/types.js';
  */
 export type EntryState = 'sent' | 'skipped' | 'pending';
 
+/**
+ * Сколько записей одного источника читать за раз при показе списка и пересылке.
+ *
+ * Верхняя граница чтения, а не фильтр: `listEntries` отдаёт всё, что есть, а
+ * решает пайплайн. Нужна, чтобы база источника не могла затянуть в память
+ * сколько угодно строк.
+ */
+const MAX_SCAN_ROWS = 1000;
+
 /** Запись из базы вместе с её состоянием — для показа админу. */
 export interface StoredEntry {
   entry: FeedEntry;
@@ -188,42 +197,34 @@ export class BotDatabase {
       .run(new Date().toISOString(), id);
   }
 
-  getLatestEntry(sourceId: string): FeedEntry | null {
-    const row = this
-      .statement(`
-        SELECT id, title, link, author, content, published, updated, source, image_urls_json
-        FROM feed_entries
-        WHERE source = ?
-        ORDER BY published DESC, first_seen_at DESC
-        LIMIT 1
-      `)
-      .get(sourceId) as FeedEntryRow | undefined;
-
-    return row ? this.toFeedEntry(row) : null;
-  }
-
   /**
-   * Последние записи источника, свежие сверху.
+   * Все записи источника, свежие сверху.
    *
-   * Отдельный метод, а не параметр у `getLatestEntry`: показ списка и выбор
-   * поста админом — разные задачи, и смешивать их значило бы тащить в
-   * `getLatestEntry` параметры, которые ему не нужны ни в одном сценарии.
+   * Отдаёт всё, а не «последние N»: что принадлежит источнику, решает его
+   * текущий `includeFilter`, а он живёт в конфиге, а не здесь. Отфильтровать
+   * раньше отсечки по лимиту нельзя — иначе источник, у которого почти все
+   * старые строки фильтруются, отдаст пустой список вместо последнего поста.
    *
-   * Порядок ОБЯЗАН совпадать с `getLatestEntry`: иначе «пост №1» в списке и
-   * «последний пост» указывали бы на разные записи, что для человека
-   * неразличимо и потому крайне запутывает.
+   * Возвращается с запасом сверх лимита списка, поэтому чтение ограничено
+   * `MAX_SCAN_ROWS`: это страховка от роста базы, а не фильтрация, и на
+   * реальных объёмах (сотни записей) она никогда не срабатывает.
+   *
+   * Порядок заканчивается `id`, а не оставляется на волю SQLite: у постов с
+   * одинаковой датой (а в фидах такие есть) порядок иначе не определён и менялся
+   * от запроса к запросу — «пост №1» в списке и «последний пост» указывали бы
+   * на разные записи в зависимости от того, как лёг план запроса.
    */
-  listRecentEntries(sourceId: string, limit: number): StoredEntry[] {
+  listEntries(sourceId: string): StoredEntry[] {
     const rows = this
       .statement(`
         SELECT id, title, link, author, content, published, updated, source,
                image_urls_json, sent_at, ignored_at
         FROM feed_entries
         WHERE source = ?
-        ORDER BY published DESC, first_seen_at DESC
+        ORDER BY published DESC, first_seen_at DESC, id ASC
         LIMIT ?
       `)
-      .all(sourceId, limit) as (FeedEntryRow & {
+      .all(sourceId, MAX_SCAN_ROWS) as (FeedEntryRow & {
       sent_at: string | null;
       ignored_at: string | null;
     })[];
